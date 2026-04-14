@@ -197,12 +197,22 @@ SPECIES = {
             "sig_range": (75, 95),
             "art": [
                 r"     /\   /\       ",
-                r"    (  \_/  )      ",
-                r"     \ ^.^ /       ",
-                r"      > v <  ~~~~  ",
-                r"     /     \ ~~~~~ ",
+                r"    (  \_/  )  /   ",
+                r"     \ ^.^ /   \   ",
+                r"      > v <     |  ",
+                r"     /     \ ~~/   ",
                 r"    (_______)      ",
             ],
+            # Optional wag frame: per-row overrides that produce the animation
+            # "B" frame. Any row not listed falls back to the base art. Keeps
+            # tail animation composable — any species can opt in without
+            # touching sprites.py.
+            "tail_b": {
+                1: r"    (  \_/  )  \   ",
+                2: r"     \ ^.^ /   /   ",
+                3: r"      > v <   |    ",
+                4: r"     /     \ ~/    ",
+            },
         },
     ],
     "legendary": [

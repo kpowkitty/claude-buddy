@@ -20,10 +20,3 @@ update_state(
     current_tool=None,
     session_id=payload.get("session_id"),
 )
-
-import subprocess
-subprocess.Popen(
-    ["python3", str(pathlib.Path(__file__).parent.parent / "speak.py"), "session_start"],
-    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    start_new_session=True,
-)

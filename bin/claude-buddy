@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# claude-buddy launcher shim.
+# Runs the Textual app using the project's venv so textual/pyte/ptyprocess are available.
+set -euo pipefail
+
+# Resolve symlinks so invoking through ~/.local/bin/claude-buddy still finds
+# the repo's bin/ directory rather than the symlink's parent.
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  TARGET="$(readlink "${SOURCE}")"
+  if [[ "${TARGET}" = /* ]]; then
+    SOURCE="${TARGET}"
+  else
+    SOURCE="$(cd -- "$(dirname -- "${SOURCE}")" && pwd)/${TARGET}"
+  fi
+done
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${SOURCE}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+VENV_PY="${REPO_ROOT}/buddy/tui/.venv/bin/python"
+CLI="${REPO_ROOT}/buddy/tui/cli.py"
+
+if [[ ! -x "${VENV_PY}" ]]; then
+  echo "claude-buddy: venv not found at ${VENV_PY}" >&2
+  echo "run: python3 -m venv ${REPO_ROOT}/buddy/tui/.venv \\" >&2
+  echo "     && ${REPO_ROOT}/buddy/tui/.venv/bin/pip install -r ${REPO_ROOT}/requirements.txt" >&2
+  exit 1
+fi
+
+exec "${VENV_PY}" "${CLI}" "$@"

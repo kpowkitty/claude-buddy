@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
-# Manual installer for claude-buddy (non-plugin install).
-# Copies scripts to ~/.claude/buddy/ and merges hooks into ~/.claude/settings.json.
+# Installer for claude-buddy.
+#
+# What it does:
+#   1. Creates the Python venv at buddy/tui/.venv (if missing) and installs
+#      runtime deps from requirements.txt.
+#   2. Copies hook scripts to ~/.claude/buddy/ and merges hook entries into
+#      ~/.claude/settings.json (idempotent — won't double-register).
+#   3. Symlinks bin/claude-buddy into ~/.local/bin/claude-buddy so you can
+#      launch from anywhere.
+#
+# Re-running the installer overwrites scripts in ~/.claude/buddy/ and
+# refreshes the symlink. It does NOT touch state.json / prefs.json or the
+# venv once it exists. To rebuild the venv, rm -rf buddy/tui/.venv first.
 
 set -euo pipefail
 
@@ -9,20 +20,34 @@ CLAUDE_DIR="${HOME}/.claude"
 BUDDY_DIR="${CLAUDE_DIR}/buddy"
 COMMANDS_DIR="${CLAUDE_DIR}/commands"
 SETTINGS="${CLAUDE_DIR}/settings.json"
+VENV_DIR="${REPO_ROOT}/buddy/tui/.venv"
+LAUNCHER_SRC="${REPO_ROOT}/bin/claude-buddy"
+LAUNCHER_DST="${HOME}/.local/bin/claude-buddy"
+HATCH_SRC="${REPO_ROOT}/bin/claude-buddy-hatch"
+HATCH_DST="${HOME}/.local/bin/claude-buddy-hatch"
 
 echo "Installing claude-buddy from ${REPO_ROOT}..."
 
-mkdir -p "${BUDDY_DIR}/hooks" "${COMMANDS_DIR}"
+# 1. Python venv + deps ──────────────────────────────────────────────────────
+if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    echo "Creating venv at ${VENV_DIR}..."
+    python3 -m venv "${VENV_DIR}"
+fi
 
-# Copy Python scripts
+echo "Installing Python dependencies..."
+"${VENV_DIR}/bin/pip" install --quiet --upgrade pip
+"${VENV_DIR}/bin/pip" install --quiet -r "${REPO_ROOT}/requirements.txt"
+
+# 2. Hook scripts + settings merge ──────────────────────────────────────────
+echo "Updating installed scripts in ${BUDDY_DIR} (overwrites any local edits there)..."
+mkdir -p "${BUDDY_DIR}/hooks" "${COMMANDS_DIR}"
 cp "${REPO_ROOT}/buddy/"*.py "${BUDDY_DIR}/"
 cp "${REPO_ROOT}/buddy/hooks/"*.py "${BUDDY_DIR}/hooks/"
 
-# Copy slash command (rewriting ${CLAUDE_PLUGIN_ROOT} → actual path)
+# Slash command: rewrite ${CLAUDE_PLUGIN_ROOT} → actual path
 sed "s|\${CLAUDE_PLUGIN_ROOT}|${CLAUDE_DIR}|g" \
     "${REPO_ROOT}/commands/buddy.md" > "${COMMANDS_DIR}/buddy.md"
 
-# Merge hooks into settings.json
 if [[ ! -f "${SETTINGS}" ]]; then
     echo '{}' > "${SETTINGS}"
 fi
@@ -60,8 +85,68 @@ settings_path.write_text(json.dumps(data, indent=2))
 print(f"Merged hooks into {settings_path}")
 PYEOF
 
+# 3. Launcher symlinks ──────────────────────────────────────────────────────
+mkdir -p "$(dirname "${LAUNCHER_DST}")"
+ln -sf "${LAUNCHER_SRC}" "${LAUNCHER_DST}"
+ln -sf "${HATCH_SRC}" "${HATCH_DST}"
+echo "Symlinked ${LAUNCHER_DST} → ${LAUNCHER_SRC}"
+echo "Symlinked ${HATCH_DST} → ${HATCH_SRC}"
+
+# PATH check
+case ":${PATH}:" in
+    *":${HOME}/.local/bin:"*)
+        path_ok=1
+        ;;
+    *)
+        path_ok=0
+        ;;
+esac
+
+# 4. Offer to hatch a buddy right now ──────────────────────────────────────
 echo
-echo "Done! Next steps:"
-echo "  1. Restart Claude Code so hooks load"
-echo "  2. Run /buddy hatch to get your first buddy"
-echo "  3. In another terminal: python3 ${BUDDY_DIR}/buddy.py"
+hatched=0
+if [[ -t 0 ]]; then
+    read -r -p "Hatch a buddy now? [Y/n] " answer || answer=""
+    answer="${answer:-Y}"
+    if [[ "${answer}" =~ ^[Yy] ]]; then
+        echo
+        if "${REPO_ROOT}/bin/claude-buddy-hatch"; then
+            hatched=1
+        else
+            echo "(hatch failed — you can try again later with: claude-buddy-hatch)" >&2
+        fi
+    fi
+else
+    echo "Not a tty — skipping hatch prompt."
+fi
+
+# 5. Next steps ────────────────────────────────────────────────────────────
+if [[ "${path_ok}" == "1" ]]; then
+    launcher_cmd="claude-buddy"
+    hatch_cmd="claude-buddy-hatch"
+else
+    launcher_cmd="${LAUNCHER_DST}"
+    hatch_cmd="${HATCH_DST}"
+fi
+
+echo
+echo "Done!"
+if [[ "${hatched}" == "1" ]]; then
+    echo "Your buddy is ready. Next:"
+    echo "  1. Restart Claude Code so hooks load — it reads ~/.claude/settings.json"
+    echo "     once at startup, so a running session won't see the new hooks."
+    echo "  2. Launch the TUI with:  ${launcher_cmd}"
+else
+    echo "Next:"
+    echo "  1. Restart Claude Code so hooks load — it reads ~/.claude/settings.json"
+    echo "     once at startup, so a running session won't see the new hooks."
+    echo "  2. Hatch a buddy:  ${hatch_cmd}"
+    echo "     (or inside Claude Code: /buddy hatch)"
+    echo "  3. Launch the TUI with:  ${launcher_cmd}"
+fi
+
+if [[ "${path_ok}" == "0" ]]; then
+    echo
+    echo "Tip: add ~/.local/bin to your PATH so plain 'claude-buddy' works:"
+    echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+fi

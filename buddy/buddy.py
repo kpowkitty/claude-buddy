@@ -10,11 +10,16 @@ import curses
 import pathlib
 import sys
 import time
+from dataclasses import dataclass
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from state import STATE, PROGRESSION, read_json, derive_mood  # noqa: E402
 from species import find_species  # noqa: E402
 from sprites import frames_for  # noqa: E402
+from layout import compute_layout  # noqa: E402
+from regions import draw_hint  # noqa: E402
+from input import LineEditor, KeyResult  # noqa: E402
+from slots import Spacer, BuddyBoxSlot, draw_prompt_area  # noqa: E402
 
 RARITY_COLOR_PAIR = {
     "common": 7,
@@ -47,118 +52,98 @@ def _mood_status(mood: str, tool: str | None) -> str:
     }.get(mood, "")
 
 
-def _draw(stdscr, tick: int):
-    stdscr.erase()
-    h, w = stdscr.getmaxyx()
+SPEECH_TTL = 12
 
+
+@dataclass
+class Ctx:
+    sprite: list[str]
+    attr: int
+    header_text: str
+    status_text: str
+    bubble_text: str | None
+    mood: str
+
+
+def _pick_frame(tick: int, mood: str, frames: list[list[str]]) -> list[str]:
+    # At 10fps, 1 tick = 100ms.
+    # Idle: frame A (open eyes) almost always; brief blink (frame B) for ~2 ticks every ~25s.
+    # Sleeping: alternate slowly (every ~1s) to animate zZz.
+    # Other moods: small back-and-forth every ~0.5s.
+    if mood == "idle":
+        cycle = tick % 250
+        frame_idx = 1 if cycle < 2 else 0
+    elif mood == "sleeping":
+        frame_idx = (tick // 10) % 2
+    else:
+        frame_idx = (tick // 5) % 2
+    return frames[frame_idx]
+
+
+def _build_ctx(tick: int) -> Ctx | str:
+    """Returns a Ctx on the happy path, or a string to render as a standalone message."""
     prog = read_json(PROGRESSION, None)
     if not prog:
-        msg = "No buddy yet. Run `/buddy hatch` in Claude Code."
-        stdscr.addstr(h // 2, max(0, (w - len(msg)) // 2), msg)
-        stdscr.refresh()
-        return
+        return "No buddy yet. Run `/buddy hatch` in Claude Code."
 
     state = read_json(STATE, {})
     mood = derive_mood(state) if state else "idle"
 
     rarity, species = find_species(prog["species_id"])
     if species is None:
-        stdscr.addstr(0, 0, f"Unknown species: {prog['species_id']}")
-        stdscr.refresh()
-        return
+        return f"Unknown species: {prog['species_id']}"
 
-    frames = frames_for(prog["species_id"], mood)
-    # At 10fps, 1 tick = 100ms.
-    # Idle: frame A (open eyes) almost always; brief blink (frame B) for ~2 ticks every ~25s.
-    # Sleeping: alternate slowly (every ~1s) to animate zZz.
-    # Other moods: small back-and-forth every ~0.5s.
-    if mood == "idle":
-        cycle = tick % 250  # 25s at 10fps
-        frame_idx = 1 if cycle < 2 else 0
-    elif mood == "sleeping":
-        frame_idx = (tick // 10) % 2
-    else:
-        frame_idx = (tick // 5) % 2
-    sprite = frames[frame_idx]
-
+    sprite = _pick_frame(tick, mood, frames_for(prog["species_id"], mood))
     color_pair = curses.color_pair(RARITY_COLOR_PAIR.get(rarity, 1))
     attr = color_pair | (curses.A_BOLD if rarity in ("epic", "legendary") else 0)
 
-    sprite_h = len(sprite)
-    sprite_w = max(len(l) for l in sprite) if sprite else 0
-    start_y = max(0, (h - sprite_h - 4) // 2)
-    start_x = max(0, (w - sprite_w) // 2)
-
-    for i, line in enumerate(sprite):
-        if start_y + i >= h:
-            break
-        try:
-            stdscr.addstr(start_y + i, start_x, line[: w - start_x], attr)
-        except curses.error:
-            pass
-
     name = prog.get("name") or species["name"]
-    header = f"★ {name} · {species['name']} · {rarity} ★"
-    status = _mood_status(mood, state.get("current_tool") if state else None)
-    footer_y = min(h - 2, start_y + sprite_h + 1)
-    try:
-        stdscr.addstr(footer_y, max(0, (w - len(header)) // 2), header, attr)
-        stdscr.addstr(footer_y + 1, max(0, (w - len(status)) // 2), status)
-    except curses.error:
-        pass
+    header_text = f"★ {name} ★"
+    status_text = _mood_status(mood, state.get("current_tool") if state else None)
 
-    # Speech bubble: show for up to SPEECH_TTL seconds after speech_ts.
+    bubble_text = None
     speech = state.get("speech") if state else None
     speech_ts = state.get("speech_ts", 0) if state else 0
-    SPEECH_TTL = 12
     if speech and time.time() - speech_ts < SPEECH_TTL:
-        _draw_bubble(stdscr, speech, start_y, start_x, sprite_w, w, attr)
+        bubble_text = speech
 
-    hint = "q to quit"
+    return Ctx(
+        sprite=sprite,
+        attr=attr,
+        header_text=header_text,
+        status_text=status_text,
+        bubble_text=bubble_text,
+        mood=mood,
+    )
+
+
+def _draw_message(stdscr, text: str) -> None:
+    h, w = stdscr.getmaxyx()
     try:
-        stdscr.addstr(h - 1, max(0, w - len(hint) - 1), hint, curses.A_DIM)
+        stdscr.addstr(h // 2, max(0, (w - len(text)) // 2), text)
     except curses.error:
         pass
 
+
+def _render(stdscr, ctx: Ctx, slots) -> None:
+    h, w = stdscr.getmaxyx()
+    prompt_h = max((s.min_h for s in slots), default=0)
+    # Sprite now lives inside BuddyBoxSlot; the "sprite" region of layout is unused
+    # (passed 0x0 until the chat PR adds a scrollback region that consumes it).
+    layout = compute_layout(h, w, sprite_h=0, sprite_w=0, prompt_h=prompt_h)
+
+    draw_prompt_area(stdscr, layout.prompt, slots, ctx)
+    draw_hint(stdscr, layout.hint, "q to quit")
+
+
+def _draw(stdscr, tick: int, slots):
+    stdscr.erase()
+    ctx = _build_ctx(tick)
+    if isinstance(ctx, str):
+        _draw_message(stdscr, ctx)
+    else:
+        _render(stdscr, ctx, slots)
     stdscr.refresh()
-
-
-def _draw_bubble(stdscr, text: str, sprite_y: int, sprite_x: int, sprite_w: int, screen_w: int, attr):
-    """Draw a speech bubble above the sprite."""
-    text = text.strip()
-    if not text:
-        return
-    # Wrap to at most 40 chars
-    max_w = min(40, screen_w - 4)
-    words = text.split()
-    lines = []
-    cur = ""
-    for word in words:
-        if len(cur) + len(word) + 1 <= max_w:
-            cur = (cur + " " + word).strip()
-        else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    if not lines:
-        return
-    bubble_w = max(len(l) for l in lines) + 4
-    bubble_x = max(0, sprite_x + (sprite_w - bubble_w) // 2)
-    bubble_y = max(0, sprite_y - len(lines) - 3)
-    top = "╭" + "─" * (bubble_w - 2) + "╮"
-    bot = "╰" + "─" * (bubble_w - 2) + "╯"
-    try:
-        stdscr.addstr(bubble_y, bubble_x, top, attr)
-        for i, line in enumerate(lines):
-            content = "│ " + line.ljust(bubble_w - 4) + " │"
-            stdscr.addstr(bubble_y + 1 + i, bubble_x, content, attr)
-        stdscr.addstr(bubble_y + 1 + len(lines), bubble_x, bot, attr)
-        tail_x = bubble_x + bubble_w // 2
-        stdscr.addstr(bubble_y + 2 + len(lines), tail_x, "▼", attr)
-    except curses.error:
-        pass
 
 
 def _loop(stdscr):
@@ -166,11 +151,18 @@ def _loop(stdscr):
     stdscr.nodelay(True)
     stdscr.timeout(100)  # 10fps
     _init_colors()
+    editor = LineEditor()
+    # Left: spacer (will become InputSlot). Right: buddy sprite + header + status.
+    slots = [Spacer(), BuddyBoxSlot()]
     tick = 0
     while True:
-        _draw(stdscr, tick)
+        _draw(stdscr, tick, slots)
         ch = stdscr.getch()
-        if ch in (ord("q"), ord("Q"), 27):
+        if ch == curses.KEY_RESIZE:
+            # Redraw immediately at the new dimensions instead of waiting for next tick.
+            _draw(stdscr, tick, slots)
+            continue
+        if editor.handle_key(ch) is KeyResult.QUIT:
             break
         tick += 1
 

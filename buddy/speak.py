@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""Decide whether buddy should speak, and if so, call Claude for a line.
+"""Drafter for buddy chirps — used two ways:
 
-Invoked in the background from hooks. Fails silently (never blocks session).
+1. **Library**: imported by the Textual app's chirp_loop (via `should_speak`,
+   `build_system`, `build_user`, `call_claude`). Each piece is a small pure
+   function the state machine composes.
 
-Flow:
-  1. Read prefs.json — if quiet, exit 0.
-  2. Load progression + state. No buddy, exit 0.
-  3. Check rate-limit (last_speech_ts + species min_gap).
-  4. Roll against event_weights[event] * base_rate.
-  5. Build Haiku prompt: personality + event context + recent prompt/tool.
-  6. Call API. Write result to state.json as speech + speech_ts.
-
-Anything going wrong → exit silently. Buddy must never disrupt Claude Code.
-
-Usage:
-  python3 speak.py <event_type> [extra_context_json]
-
-Requires: ANTHROPIC_API_KEY in env.
+2. **Script**: `python3 speak.py <event> [extra_json]` runs the whole flow
+   (roll → draft → write state.json). Retained for dev tooling and legacy
+   hooks that haven't been migrated. Failing silently never disrupts Claude
+   Code. Going forward, the Textual app owns chirp generation end-to-end
+   via chirp_loop; this main() is a compatibility shim.
 """
 from __future__ import annotations
 
@@ -42,7 +35,11 @@ def _load_prefs():
     return read_json(PREFS, {"chatty": True})
 
 
-def _should_speak(prog: dict, state: dict, event: str) -> bool:
+def should_speak(prog: dict, state: dict, event: str) -> bool:
+    """Roll prob + cooldown to decide whether buddy speaks on this event.
+
+    Pure function of its inputs. Reused by chirp_loop.
+    """
     prefs = _load_prefs()
     if not prefs.get("chatty", True):
         return False
@@ -57,36 +54,55 @@ def _should_speak(prog: dict, state: dict, event: str) -> bool:
     return random.random() < (BASE_RATE * w)
 
 
-def _build_system(prog: dict, pers: dict) -> str:
+# Back-compat alias — old callers may import _should_speak.
+_should_speak = should_speak
+
+
+def build_system(prog: dict, pers: dict) -> str:
     name = prog.get("name") or prog["species_name"]
     rarity = prog.get("rarity", "common")
     sig = prog.get("signature_skill", "")
+    examples = pers.get("examples") or []
+    examples_block = ""
+    if examples:
+        joined = "\n".join(f"  - {ex}" for ex in examples)
+        examples_block = (
+            f"\n\nExamples of how you speak (match this tone and brevity — don't copy verbatim):\n{joined}"
+        )
     return (
-        f"You are {name}, a {rarity} {prog['species_name']} — a tiny coding companion "
-        f"watching over the user's terminal. Your signature skill is {sig}. "
-        f"Voice: {pers['voice']}\n\n"
-        "CRITICAL RULES:\n"
-        "- Reply with ONE short line only, under 12 words.\n"
+        f"You are {name}, a {rarity} {prog['species_name']} — a tiny companion "
+        f"living in the user's terminal. Your signature skill is {sig}.\n\n"
+        f"Voice:\n{pers['voice']}"
+        f"{examples_block}\n\n"
+        "RULES:\n"
+        "- Reply with ONE short line only, under 15 words.\n"
         "- No quotes, no prefixes, no 'Buddy says:'.\n"
-        "- Never offer to write code or give technical advice — you're just a creature who chirps.\n"
-        "- Stay in character. Stay brief. Be cute or grouchy per your voice."
+        "- Stay in your voice. Your personality decides how you respond —\n"
+        "  whether you answer, deflect, joke, hint, or ignore is up to your character.\n"
+        "- Don't be annoying."
     )
 
 
-def _build_user(event: str, extra: dict) -> str:
-    tool = extra.get("tool_name", "")
-    event_desc = {
-        "prompt": f"The user just submitted a new prompt.",
-        "pre_tool": f"The assistant is about to use the {tool} tool.",
-        "post_tool": f"The assistant just finished using the {tool} tool.",
-        "tool_error": f"The {tool} tool just failed with an error.",
-        "stop": "The assistant just finished its response.",
-        "session_start": "A new Claude Code session has started. Greet the user briefly.",
-    }.get(event, f"Event: {event}")
-    return event_desc + "\n\nSay one short thing in your voice."
+def build_user(kind: str, text: str) -> str:
+    """Single user-message template. `kind` is short human prose describing
+    what to respond to (e.g. 'the user's question', 'a user prompt',
+    'a claude response', 'a session_start event'). `text` is the content.
+
+    The system prompt tells the buddy who it is; this tells it what to react
+    to. Voice decides whether it engages with the content or chirps around it.
+    """
+    text = (text or "").strip()
+    kind = (kind or "an event").strip() or "an event"
+    if text:
+        return f"Respond to {kind}:\n  \"{text}\""
+    return f"Respond to {kind}."
 
 
-def _call_claude(system: str, user: str) -> str | None:
+# Back-compat aliases.
+_build_user = build_user
+
+
+def call_claude(system: str, user: str) -> str | None:
     """Shell out to `claude -p` so we use the user's Max auth, not a pay-per-token API key."""
     cli = shutil.which("claude")
     if not cli:
@@ -118,6 +134,28 @@ def _call_claude(system: str, user: str) -> str | None:
     return text or None
 
 
+def _script_event_to_prompt(event: str, extra: dict) -> tuple[str, str]:
+    """Map the legacy hook-script event name to (kind, text) for build_user.
+
+    Only used by the script entry point (main()); the Textual app composes
+    these directly.
+    """
+    tool = extra.get("tool_name", "")
+    if event == "prompt":
+        return ("a user prompt", "")
+    if event == "pre_tool":
+        return ("a pre-tool event", f"about to use {tool}" if tool else "")
+    if event == "post_tool":
+        return ("a post-tool event", f"finished using {tool}" if tool else "")
+    if event == "tool_error":
+        return ("a tool error", f"{tool} failed" if tool else "")
+    if event == "stop":
+        return ("a claude stop event", "")
+    if event == "session_start":
+        return ("a session_start event (greet the user)", "")
+    return (f"a {event} event", "")
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 0
@@ -133,11 +171,12 @@ def main() -> int:
     if not prog:
         return 0
     state = read_json(STATE, {})
-    if not _should_speak(prog, state, event):
+    if not should_speak(prog, state, event):
         return 0
 
     pers = for_species(prog["species_id"])
-    line = _call_claude(_build_system(prog, pers), _build_user(event, extra))
+    kind, text = _script_event_to_prompt(event, extra)
+    line = call_claude(build_system(prog, pers), build_user(kind, text))
     if not line:
         return 0
 
@@ -146,6 +185,11 @@ def main() -> int:
     state["last_speech_ts"] = time.time()
     write_atomic(STATE, state)
     return 0
+
+
+# Back-compat aliases for the underscore-prefixed names.
+_build_system = build_system
+_call_claude = call_claude
 
 
 if __name__ == "__main__":

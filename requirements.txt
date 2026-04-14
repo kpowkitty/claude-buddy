@@ -1,0 +1,13 @@
+# Runtime dependencies for the claude-buddy Textual app.
+# Install into the project venv:
+#   python3 -m venv buddy/tui/.venv
+#   buddy/tui/.venv/bin/pip install -r requirements.txt
+
+textual>=8.0
+pyte>=0.8
+ptyprocess>=0.7
+
+# Test-only — included so `pytest buddy/tui/tests/` works after a fresh install.
+# Move to a separate requirements-dev.txt later if we want to slim runtime.
+pytest>=9.0
+pytest-asyncio>=1.3

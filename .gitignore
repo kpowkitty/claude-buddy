@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 .DS_Store
 *.swp
+
+# Python virtualenvs (created by install.sh)
+.venv/
+.venv-spike/
+
+# Test caches
+.pytest_cache/

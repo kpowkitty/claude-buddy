@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""UserPromptSubmit hook.
+
+Stashes the user's prompt text into state.json so the next Stop event can
+bundle it into a pending chirp event. No direct chirp spawn — the Textual
+app's chirp_loop owns chirp generation.
+"""
 import json
 import os
 import pathlib
@@ -21,12 +27,6 @@ update_state(
     current_tool=None,
     session_id=payload.get("session_id"),
     watching_until=time.time() + 600,  # stay watching until Stop clears it
+    last_user_prompt=payload.get("prompt", ""),
 )
 bump_progression(total_prompts=1)
-
-import subprocess
-subprocess.Popen(
-    ["python3", str(pathlib.Path(__file__).parent.parent / "speak.py"), "prompt"],
-    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    start_new_session=True,
-)

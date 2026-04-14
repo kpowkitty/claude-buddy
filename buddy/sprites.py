@@ -53,6 +53,18 @@ def _mouth_sub(lines, finds_and_replaces):
     return out
 
 
+def _apply_tail_b(frame_b, species):
+    """Overlay the species' optional `tail_b` row-overrides onto a frame.
+
+    Species opt into tail animation by declaring `tail_b: {row_index: line}`
+    alongside their art. Any species without `tail_b` returns unchanged.
+    """
+    tail_b = species.get("tail_b")
+    if not tail_b:
+        return frame_b
+    return [tail_b.get(i, line) for i, line in enumerate(frame_b)]
+
+
 def frames_for(species_id: str, mood: str):
     """Return a list of 2 frames (each a list of strings) for given species and mood."""
     _, species = find_species(species_id)
@@ -64,35 +76,39 @@ def frames_for(species_id: str, mood: str):
         # Frame A = base. Frame B = blink (eyes → -).
         f_a = list(base)
         f_b = _sub_eyes(base, "-")
-        return [f_a, f_b]
-
-    if mood == "attentive":
+    elif mood == "attentive":
         # Wide eyes (O/0) and slight mouth twitch.
         f_a = _sub_eyes(base, "O")
         f_b = _sub_eyes(base, "0")
-        return [f_a, f_b]
-
-    if mood == "watching":
+    elif mood == "watching":
         # Fixated eyes (@).
         f_a = _sub_eyes(base, "@")
         f_b = _sub_eyes(base, "@")
-        # Subtle motion: shift feet indicator if present
-        return [f_a, f_b]
-
-    if mood == "celebrating":
+    elif mood == "celebrating":
         # Happy eyes (^) + sparkle overlay.
         happy_a = _sub_eyes(base, "^")
         happy_b = _sub_eyes(base, "*")
         f_a = _add_overlay(happy_a, "* . *")
         f_b = _add_overlay(happy_b, " * . ")
-        return [f_a, f_b]
-
-    if mood == "sleeping":
+    elif mood == "sleeping":
         # Closed eyes (-) + zZz overlay.
         tired = _sub_eyes(base, "-")
         f_a = _add_overlay(tired, "zZz")
         f_b = _add_overlay(tired, " zZ ")
-        return [f_a, f_b]
+    else:
+        f_a = list(base)
+        f_b = _sub_eyes(base, "-")
 
-    # Fallback: idle
-    return [list(base), _sub_eyes(base, "-")]
+    # Overlay the wag onto frame B so every mood animates the tail. Moods
+    # that use _add_overlay prepend an extra line, shifting row indices —
+    # but tail_b is keyed against the base art, so we apply BEFORE the
+    # overlay. Re-derive frame B for those moods so the shift doesn't
+    # corrupt tail_b's indices.
+    if species.get("tail_b"):
+        if mood == "celebrating":
+            f_b = _add_overlay(_apply_tail_b(_sub_eyes(base, "*"), species), " * . ")
+        elif mood == "sleeping":
+            f_b = _add_overlay(_apply_tail_b(_sub_eyes(base, "-"), species), " zZ ")
+        else:
+            f_b = _apply_tail_b(f_b, species)
+    return [f_a, f_b]

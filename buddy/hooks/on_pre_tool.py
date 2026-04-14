@@ -22,11 +22,3 @@ update_state(
     session_id=payload.get("session_id"),
     watching_until=time.time() + 600,  # extend; cleared by Stop
 )
-
-import json as _json, subprocess
-subprocess.Popen(
-    ["python3", str(pathlib.Path(__file__).parent.parent / "speak.py"),
-     "pre_tool", _json.dumps({"tool_name": payload.get("tool_name", "")})],
-    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    start_new_session=True,
-)

@@ -35,6 +35,19 @@ def update_state(**fields) -> None:
     write_atomic(STATE, s)
 
 
+def push_event(event: dict) -> None:
+    """Append `event` to state.json['pending_events'] atomically.
+
+    The Textual app's chirp_loop consumes these. Hooks enqueue; the loop
+    dequeues one event per IDLE tick.
+    """
+    s = read_json(STATE, {})
+    queue = list(s.get("pending_events") or [])
+    queue.append(dict(event))
+    s["pending_events"] = queue
+    write_atomic(STATE, s)
+
+
 def bump_progression(**deltas) -> dict:
     """Add deltas to counters in progression.json. Returns new progression."""
     p = read_json(PROGRESSION, None)

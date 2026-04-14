@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# claude-buddy-hatch — roll a buddy without opening Claude Code.
+# Thin wrapper around buddy/hatch.py; same args the slash command uses.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${SOURCE}" ]]; do
+  TARGET="$(readlink "${SOURCE}")"
+  if [[ "${TARGET}" = /* ]]; then
+    SOURCE="${TARGET}"
+  else
+    SOURCE="$(cd -- "$(dirname -- "${SOURCE}")" && pwd)/${TARGET}"
+  fi
+done
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${SOURCE}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+HATCH_PY="${REPO_ROOT}/buddy/hatch.py"
+
+# hatch.py is pure stdlib, but run it through the project python for
+# consistency with the rest of the toolchain.
+PY="${REPO_ROOT}/buddy/tui/.venv/bin/python"
+if [[ ! -x "${PY}" ]]; then
+  PY="python3"
+fi
+
+exec "${PY}" "${HATCH_PY}" "$@"

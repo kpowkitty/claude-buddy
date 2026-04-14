@@ -1,49 +1,75 @@
 # claude-buddy
 
-A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claude-code). Hatch one, name them, and they'll live in a second terminal window, watching you code and occasionally piping up with personality-driven remarks.
+A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claude-code). Hatch one, name them, and they'll live in a side panel next to Claude, watching you code and occasionally piping up with personality-driven remarks.
 
 ```
      /\   /\
-    (  \_/  )
-     \ @.@ /
-      > v <  ~~~~
-     /     \ ~~~~~
+    (  \_/  )  /
+     \ ^.^ /   \
+      > v <     |
+     /     \ ~~/
     (_______)
 
    ★ quine · Kitsune · epic ★
-   watching your Bash...
 ```
 
 ## What it does
 
 - **Gacha hatch**: `/buddy hatch` rolls a rarity (common 60% / uncommon 25% / rare 10% / epic 4% / legendary 1%) and a species within that tier. 11 species total.
 - **Skills**: every buddy rolls 8 skill stats (wisdom, debugging, refactoring, etc.). Each species has a baseline range and a signature skill that rolls much higher.
-- **Lives in a second terminal**: run `python3 buddy/buddy.py` in a separate window and your buddy appears, animated, reacting to Claude Code events.
+- **Embedded TUI**: `claude-buddy` launches Claude Code inside a Textual app, with your buddy animated in a side panel reacting to what you're doing.
 - **Hooks**: watches `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart` to shift mood (idle / attentive / watching / sleeping).
 - **Personality-driven speech**: your buddy can occasionally pipe up in character via Claude — wise Owlet quotes proverbs, Dragonling snarls at errors, Moonwyrm speaks in cosmic riddles. Uses your existing Claude Code auth (no separate API key).
+- **Talk to your buddy directly**: prefix a line with `~{name}` (e.g. `~quine what color is the sky`) to have your buddy reply instead of Claude.
 
 ## Install
 
-### Via Claude Code plugin marketplace (recommended)
-
-```
-/plugin marketplace add <your-github-username>/claude-buddy
-/plugin install claude-buddy@claude-buddy
-```
-
-Then restart Claude Code so hooks load.
-
-### Manual install
+Requires Python 3.10+ and the Claude Code CLI (`claude`) on your PATH.
 
 ```bash
-git clone https://github.com/<your-github-username>/claude-buddy.git
+git clone https://github.com/kpowkitty/claude-buddy.git
 cd claude-buddy
 ./install.sh
 ```
 
+The installer:
+- creates a venv at `buddy/tui/.venv` and installs runtime deps,
+- copies hook scripts to `~/.claude/buddy/` and merges hook entries into `~/.claude/settings.json`,
+- symlinks `bin/claude-buddy` and `bin/claude-buddy-hatch` into `~/.local/bin/` so you can launch from any directory,
+- offers to hatch your first buddy right away.
+
+If `~/.local/bin` isn't on your PATH, the installer prints a one-liner to add it.
+
+After installing, restart Claude Code so the hooks take effect — Claude reads `~/.claude/settings.json` once at startup, so an already-running session won't see the new hooks. If you skipped the hatch prompt, roll your first buddy with `claude-buddy-hatch` (or `/buddy hatch` inside Claude).
+
 ## Usage
 
-In Claude Code:
+Launch the TUI from any terminal:
+
+```bash
+claude-buddy
+```
+
+Roll a new buddy without opening Claude:
+
+```bash
+claude-buddy-hatch          # errors if you already have one
+claude-buddy-hatch --peek   # roll without saving
+claude-buddy-hatch --force  # re-roll, discarding current
+```
+
+Claude Code runs in the main pane; your buddy lives in a panel on the right. Keybindings:
+
+- `Ctrl-Q` — quit
+- `Ctrl-B` — toggle the buddy panel
+- `Ctrl-S` — toggle the skill grid
+- `Ctrl-P` — pet your buddy
+- **Scroll wheel** — scroll through the Claude pane's history
+- `Shift-PageUp` / `Shift-PageDown` — same, via keyboard
+- `Shift-End` — snap back to the live tail
+- `~{name} <message>` — talk to your buddy directly (e.g. `~quine hi`). Claude never sees it.
+
+Claude Code slash commands (all work while the TUI is running):
 
 - `/buddy hatch` — roll your first buddy
 - `/buddy` — see their card (art, skills, age)
@@ -52,35 +78,25 @@ In Claude Code:
 - `/buddy quiet` / `/buddy chatty` — toggle whether they speak
 - `/buddy forget --confirm` — release them so you can hatch a new one
 
-In a second terminal:
-
-```bash
-python3 ~/.claude/plugins/.../buddy/buddy.py
-# or if manually installed:
-python3 ~/.claude/buddy/buddy.py
-```
-
-Press `q` or Ctrl-C to quit the renderer.
-
-## Requirements
-
-- Python 3.9+ (uses stdlib only — `curses`, `json`, `pathlib`)
-- Claude Code CLI (`claude`) for personality speech (optional; buddy works silent without it)
-
 ## How it works
 
 ```
-┌─────────────────────────┐         ┌──────────────────────────┐
-│  Terminal 1: Claude     │         │  Terminal 2: Buddy       │
-│  Code session           │  writes │  Renderer (python3)      │
-│                         │  state  │                          │
-│  /buddy command         │────────▶│  reads state.json        │
-│  + 5 lifecycle hooks    │  ~/.claude/buddy/state.json       │
-│                         │         │  animates at 10fps       │
-└─────────────────────────┘         └──────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  claude-buddy TUI (Textual)                                   │
+│                                                               │
+│  ┌──────────────────────────┐   ┌─────────────────────────┐   │
+│  │  Claude Code (in a PTY,  │   │  Habitat panel:         │   │
+│  │  rendered via pyte)      │   │   sprite, name, XP bar  │   │
+│  │                          │   │   speech bubble         │   │
+│  │  /buddy commands         │   │                         │   │
+│  │  + 5 lifecycle hooks ────┼──▶│  reads state.json       │   │
+│  │                          │   │  animates at 10fps      │   │
+│  └──────────────────────────┘   └─────────────────────────┘   │
+│           writes to ~/.claude/buddy/state.json                │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-Hooks fire on Claude Code events, atomically write `state.json` with mood + current tool, and optionally spawn `speak.py` which shells out to `claude -p` for a personality-driven quip.
+Hooks fire on Claude Code events, atomically write `state.json` with mood + current tool, and (optionally) shell out to `claude -p` via `speak.py` for a personality-driven quip. The Textual app polls `state.json` to drive the animation and speech bubble.
 
 ## Contributing
 
