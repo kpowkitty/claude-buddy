@@ -28,10 +28,18 @@ def main() -> int:
     if not PROGRESSION.exists():
         print("You don't have a buddy yet. Run `/buddy hatch` to get one.")
         return 1
-    data = json.loads(PROGRESSION.read_text())
-    rarity, species = find_species(data["species_id"])
+    try:
+        data = json.loads(PROGRESSION.read_text())
+    except json.JSONDecodeError:
+        print("Your buddy's save file is corrupted. Run `/buddy forget --confirm` then `/buddy hatch`.")
+        return 1
+    species_id = data.get("species_id")
+    if not species_id:
+        print("Your buddy's save file is from an older version. Run `/buddy forget --confirm` then `/buddy hatch`.")
+        return 1
+    rarity, species = find_species(species_id)
     if species is None:
-        print(f"Unknown species id: {data['species_id']}")
+        print(f"Unknown species id: {species_id}. Run `/buddy forget --confirm` then `/buddy hatch`.")
         return 1
 
     color = RARITY_COLOR[rarity]
