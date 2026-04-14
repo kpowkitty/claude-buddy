@@ -4,17 +4,15 @@ The prompt area (bottom strip of the buddy window) is a row of `PromptSlot`
 widgets laid out left-to-right. Adding a feature (input, buddy-in-a-box, mood
 badge, rarity meter, tool indicator) is a matter of writing a new slot class
 and registering it — no layout or renderer changes required.
-
-v1 only ships `Spacer`, which draws nothing. This proves the plumbing without
-changing what the user sees. `InputSlot` and `BuddyBoxSlot` land with the
-mini Claude terminal feature.
 """
 from __future__ import annotations
 
+import curses
 from typing import Protocol, runtime_checkable
 
 from input import KeyResult
 from layout import Rect
+from regions import draw_bubble
 
 
 @runtime_checkable
@@ -28,7 +26,7 @@ class PromptSlot(Protocol):
 
 
 class Spacer:
-    """Invisible filler. v1 default so the prompt area exists but draws nothing."""
+    """Invisible filler."""
     min_w = 0
     min_h = 0
     flex = 1
@@ -38,6 +36,71 @@ class Spacer:
 
     def handle_key(self, ch: int) -> KeyResult:
         return KeyResult.IGNORED
+
+
+# Max sprite dimensions (see species.py art): 6 rows + optional overlay row = 7.
+# Width is up to 20. Box adds 2 cols of padding.
+_BUDDY_BOX_W = 22
+_BUDDY_BOX_H = 7 + 2  # sprite + header + status
+
+
+class BuddyBoxSlot:
+    """Renders the buddy sprite + header + status in a fixed column.
+
+    The slot also owns bubble rendering (anchored above the sprite inside
+    this slot). If the bubble's requested height would exceed the slot,
+    draw_bubble already handles falling back / wrapping gracefully.
+    """
+    min_w = _BUDDY_BOX_W
+    min_h = _BUDDY_BOX_H
+    flex = 0
+
+    def render(self, stdscr, rect: Rect, ctx) -> None:
+        if rect.w <= 0 or rect.h <= 0 or ctx is None:
+            return
+        sprite = ctx.sprite
+        sprite_h = len(sprite)
+        sprite_w = max((len(l) for l in sprite), default=0)
+
+        # Center the sprite horizontally inside the slot, pin to top.
+        sprite_x = rect.x + max(0, (rect.w - sprite_w) // 2)
+        sprite_y = rect.y
+
+        for i, line in enumerate(sprite):
+            if sprite_y + i >= rect.y + rect.h:
+                break
+            try:
+                stdscr.addstr(sprite_y + i, sprite_x, line[: rect.w], ctx.attr)
+            except curses.error:
+                pass
+
+        # Header + status occupy the two rows below the sprite, centered in slot width.
+        header_y = sprite_y + sprite_h
+        status_y = header_y + 1
+        if header_y < rect.y + rect.h:
+            self._center_line(stdscr, header_y, rect, ctx.header_text, ctx.attr)
+        if status_y < rect.y + rect.h:
+            self._center_line(stdscr, status_y, rect, ctx.status_text, curses.A_DIM)
+
+        # Bubble floats above the sprite (extends upward into the scrollback region).
+        if ctx.bubble_text:
+            sprite_rect = Rect(y=sprite_y, x=sprite_x, h=sprite_h, w=sprite_w)
+            draw_bubble(stdscr, sprite_rect, ctx.bubble_text, ctx.attr)
+
+    def handle_key(self, ch: int) -> KeyResult:
+        return KeyResult.IGNORED
+
+    @staticmethod
+    def _center_line(stdscr, y: int, rect: Rect, text: str, attr) -> None:
+        if not text or rect.w <= 0:
+            return
+        if len(text) > rect.w:
+            text = text[: max(0, rect.w - 1)] + "…" if rect.w > 1 else text[: rect.w]
+        x = rect.x + max(0, (rect.w - len(text)) // 2)
+        try:
+            stdscr.addstr(y, x, text, attr)
+        except curses.error:
+            pass
 
 
 def layout_slots(slots: list[PromptSlot], rect: Rect) -> list[Rect]:

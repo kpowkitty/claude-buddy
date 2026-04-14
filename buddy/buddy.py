@@ -17,9 +17,9 @@ from state import STATE, PROGRESSION, read_json, derive_mood  # noqa: E402
 from species import find_species  # noqa: E402
 from sprites import frames_for  # noqa: E402
 from layout import compute_layout  # noqa: E402
-from regions import draw_sprite, draw_header, draw_status, draw_hint, draw_bubble  # noqa: E402
+from regions import draw_hint  # noqa: E402
 from input import LineEditor, KeyResult  # noqa: E402
-from slots import Spacer, draw_prompt_area  # noqa: E402
+from slots import Spacer, BuddyBoxSlot, draw_prompt_area  # noqa: E402
 
 RARITY_COLOR_PAIR = {
     "common": 7,
@@ -98,7 +98,7 @@ def _build_ctx(tick: int) -> Ctx | str:
     attr = color_pair | (curses.A_BOLD if rarity in ("epic", "legendary") else 0)
 
     name = prog.get("name") or species["name"]
-    header_text = f"★ {name} · {species['name']} · {rarity} ★"
+    header_text = f"★ {name} ★"
     status_text = _mood_status(mood, state.get("current_tool") if state else None)
 
     bubble_text = None
@@ -127,16 +127,11 @@ def _draw_message(stdscr, text: str) -> None:
 
 def _render(stdscr, ctx: Ctx, slots) -> None:
     h, w = stdscr.getmaxyx()
-    sprite_h = len(ctx.sprite)
-    sprite_w = max(len(l) for l in ctx.sprite) if ctx.sprite else 0
     prompt_h = max((s.min_h for s in slots), default=0)
-    layout = compute_layout(h, w, sprite_h, sprite_w, prompt_h=prompt_h)
+    # Sprite now lives inside BuddyBoxSlot; the "sprite" region of layout is unused
+    # (passed 0x0 until the chat PR adds a scrollback region that consumes it).
+    layout = compute_layout(h, w, sprite_h=0, sprite_w=0, prompt_h=prompt_h)
 
-    draw_sprite(stdscr, layout.sprite, ctx.sprite, ctx.attr)
-    draw_header(stdscr, layout.header, ctx.header_text, ctx.attr)
-    draw_status(stdscr, layout.status, ctx.status_text)
-    if ctx.bubble_text:
-        draw_bubble(stdscr, layout.sprite, ctx.bubble_text, ctx.attr)
     draw_prompt_area(stdscr, layout.prompt, slots, ctx)
     draw_hint(stdscr, layout.hint, "q to quit")
 
@@ -157,7 +152,8 @@ def _loop(stdscr):
     stdscr.timeout(100)  # 10fps
     _init_colors()
     editor = LineEditor()
-    slots = [Spacer()]  # v1: invisible filler. chat PR adds InputSlot + BuddyBoxSlot.
+    # Left: spacer (will become InputSlot). Right: buddy sprite + header + status.
+    slots = [Spacer(), BuddyBoxSlot()]
     tick = 0
     while True:
         _draw(stdscr, tick, slots)
