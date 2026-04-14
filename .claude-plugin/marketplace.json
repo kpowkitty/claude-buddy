@@ -1,0 +1,14 @@
+{
+  "name": "claude-buddy",
+  "owner": {
+    "name": "luna"
+  },
+  "plugins": [
+    {
+      "name": "claude-buddy",
+      "source": "./",
+      "description": "A gacha-rolled ASCII coding companion.",
+      "version": "0.1.0"
+    }
+  ]
+}

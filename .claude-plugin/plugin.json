@@ -1,0 +1,9 @@
+{
+  "name": "claude-buddy",
+  "description": "A gacha-rolled ASCII coding companion that watches you code and occasionally speaks up. Hatch one, name them, watch them react to your tools in a second terminal.",
+  "version": "0.1.0",
+  "license": "BSD-3-Clause",
+  "keywords": ["companion", "gacha", "ascii", "fun"],
+  "commands": "./commands",
+  "hooks": "./hooks/hooks.json"
+}
