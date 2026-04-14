@@ -27,7 +27,7 @@ A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claud
 ### Via Claude Code plugin marketplace (recommended)
 
 ```
-/plugin marketplace add <your-github-username>/claude-buddy
+/plugin marketplace add kpowkitty/claude-buddy
 /plugin install claude-buddy@claude-buddy
 ```
 
@@ -36,7 +36,7 @@ Then restart Claude Code so hooks load.
 ### Manual install
 
 ```bash
-git clone https://github.com/<your-github-username>/claude-buddy.git
+git clone https://github.com/kpowkitty/claude-buddy.git
 cd claude-buddy
 ./install.sh
 ```
