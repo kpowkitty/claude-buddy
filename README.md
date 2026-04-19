@@ -127,11 +127,11 @@ All `/buddy` commands work inside Claude (whether launched via `claude-buddy` or
 │  │  rendered via pyte)          │  │  (floats top-right):   │    │
 │  │                              │  │    speech bubble       │    │
 │  │  Claude's text wraps around  │  │    sprite              │    │
-│  │  the pet's reserved rect ────┼─▶│    name + XP + time    │    │
+│  │  the pet's reserved rect ────┼▶│    name + XP + time    │    │
 │  │  (L-shape reflow)            │  │    skills (toggle)     │    │
 │  │                              │  │                        │    │
 │  │  /buddy commands             │  │  reads state.json      │    │
-│  │  + 5 lifecycle hooks ────────┼─▶│  animates at 10 fps    │    │
+│  │  + 5 lifecycle hooks ────────┼▶│  animates at 10 fps    │    │
 │  └──────────────────────────────┘  └────────────────────────┘    │
 │                                                                  │
 │         writes to ~/.claude/buddy/state.json                     │
