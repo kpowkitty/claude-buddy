@@ -22,8 +22,8 @@ from typing import Optional
 _HERE = Path(__file__).resolve().parent
 _BUDDY = _HERE.parent
 sys.path.insert(0, str(_BUDDY))
-from state import derive_mood  # noqa: E402
-from collection import active_buddy, migrate  # noqa: E402
+from state import derive_mood, write_atomic  # noqa: E402
+from collection import active_buddy, ensure_first_seen, migrate  # noqa: E402
 
 # Default file paths honour BUDDY_STATE_DIR so sim-test runs redirect
 # automatically. Overridable via args (used by pytest).
@@ -80,8 +80,20 @@ def read_view(
     state = _read_json(Path(state_path))
     raw_prog = _read_json(Path(progression_path))
     # Always migrate — handles both collection shape and legacy single-buddy.
-    # active_buddy() returns the flat dict the rest of this function expects.
-    prog = active_buddy(migrate(raw_prog)) or {}
+    collection = migrate(raw_prog)
+    # Backfill first_seen_ts on buddies that pre-date the field so the
+    # "time with buddy" counter starts ticking instead of reading 0. We
+    # persist the change immediately — without that, every read would
+    # re-stamp with a new `now`, resetting the counter each tick.
+    collection, backfilled = ensure_first_seen(collection)
+    if backfilled:
+        try:
+            write_atomic(Path(progression_path), collection)
+        except Exception:
+            # Persisting the backfill is best-effort. If it fails, we'll
+            # try again next read — still better than crashing the UI.
+            pass
+    prog = active_buddy(collection) or {}
 
     has_buddy = bool(prog.get("species_id"))
 

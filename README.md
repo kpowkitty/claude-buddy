@@ -3,14 +3,23 @@
 A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claude-code). Hatch one, name them, and they'll live in the top-right corner of your terminal next to Claude, watching you code and occasionally piping up with personality-driven remarks.
 
 ```
-     /\   /\
-    (  \_/  )  /
-     \ ^.^ /   \
-      > v <     |
-     /     \ ~~/
-    (_______)
+ ╭──────────────────────╮
+ │     tests don't      │
+ │    lie, but your     │
+ │  assumptions do 🦊   │
+ ╰──────────────────────╯
+            ▼
+       /\   /\
+      (  \_/  )  /
+       \ ^.^ /   \
+        > v <     |
+       /     \ ~~/
+      (_______)
 
-   ★ quine · Kitsune · epic ★
+       ★ quine ★
+         lvl 3
+     ████████░░░░░░░░
+    with you 2d 4h
 ```
 
 ## What it does
@@ -131,7 +140,7 @@ All `/buddy` commands work inside Claude (whether launched via `claude-buddy` or
 
 **Hook pipeline.** Claude Code fires 5 lifecycle events. Each hook script atomically writes `state.json` with the current mood + tool + timestamp. The Textual app polls that file to drive the sprite animation, mood, and optional speech bubble. Speech is produced by shelling out to `claude -p` via `speak.py` — same auth, no separate API key.
 
-**L-shape reflow.** The pet reserves a 24×17 rectangle in the top-right (chat bubble + sprite + name + XP + time). Inside those rows, Claude's text is wrapped at `cols - 24` by a custom `pyte.HistoryScreen` subclass (`lreflow.py`). Once Claude's content extends below the pet zone, the widget tells Claude it has the full terminal width and reflows the visible content via Ctrl+L. On resize, the pane auto-refreshes so no stale pixels linger.
+**L-shape reflow.** The pet reserves a 24×18 rectangle in the top-right (chat bubble + sprite + name + XP + time). Inside those rows, Claude's text is wrapped at `cols - 24` by a custom `pyte.HistoryScreen` subclass (`lreflow.py`). Once Claude's content extends below the pet zone, the widget tells Claude it has the full terminal width and reflows the visible content via Ctrl+L. On resize, the pane auto-refreshes so no stale pixels linger.
 
 **Animation.** Sprites animate on independent cycles: a steady 1-second tail wag for species with a `tail_b` alternate frame, layered with a ~10-second blink. Sleeping buddies stop wagging entirely.
 

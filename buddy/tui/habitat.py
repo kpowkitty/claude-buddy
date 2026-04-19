@@ -330,8 +330,12 @@ class TimeWithBuddy(Widget):
     _text: reactive[str] = reactive("")
 
     def watch_view(self, view: Optional[BuddyView]) -> None:
-        if view is None or not view.has_buddy or view.time_with_buddy_s <= 0:
+        if view is None or not view.has_buddy:
             self._text = ""
+        elif view.time_with_buddy_s <= 0:
+            # Brand-new buddy (or one hatched before we started stamping
+            # first_seen_ts). Show something so the row doesn't look empty.
+            self._text = "just hatched!"
         else:
             self._text = _fmt_duration(view.time_with_buddy_s)
         self.refresh()
@@ -397,7 +401,9 @@ class Habitat(Vertical):
         width: {HABITAT_WIDTH};
         height: 100%;
         background: rgba(0, 0, 0, 0);
-        padding: 0 1;
+        /* No padding: Textual's 8.2.3 alpha-drop bug paints padding
+           strips opaque even when background is rgba(0,0,0,0), creating
+           visible dark borders at the pane edges. */
     }}
     Habitat > * {{
         background: rgba(0, 0, 0, 0);

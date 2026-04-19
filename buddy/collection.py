@@ -16,6 +16,7 @@ they're computed from the stored buddies on demand.
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional
 
 # ── economy constants (tuneable) ─────────────────────────────────────────────
@@ -68,6 +69,35 @@ def migrate(raw: dict) -> dict:
         }
     # Unknown shape — give up gracefully.
     return empty_collection()
+
+
+def ensure_first_seen(collection: dict) -> tuple[dict, bool]:
+    """Stamp first_seen_ts on any buddy that pre-dates the field.
+
+    Returns (collection, changed). `changed` is True if anything was
+    backfilled — callers should persist the result to avoid drift (a
+    re-read would otherwise re-stamp with a new `now`, resetting the
+    time-with-buddy counter every tick).
+
+    We can't recover the real hatch time, so "now" is our floor — the
+    counter starts ticking forward from the first time a session sees
+    the buddy.
+    """
+    now = time.time()
+    changed = False
+    buddies = dict(collection.get("buddies") or {})
+    for buddy_id, buddy in list(buddies.items()):
+        if not isinstance(buddy, dict):
+            continue
+        if not buddy.get("first_seen_ts"):
+            buddy = dict(buddy)
+            buddy["first_seen_ts"] = now
+            buddies[buddy_id] = buddy
+            changed = True
+    if changed:
+        collection = dict(collection)
+        collection["buddies"] = buddies
+    return collection, changed
 
 
 # ── accessors ────────────────────────────────────────────────────────────────

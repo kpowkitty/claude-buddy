@@ -98,12 +98,13 @@ def _cell_style(char) -> Style:
 _POLL_HZ = 30
 _READ_CHUNK = 4096
 
-# Pet overlay geometry. The habitat widget renders the sprite + name + XP +
-# time + a 7-row bubble reservation in the top-right, totalling 17 rows by
-# 24 cols. The L-reflow screen and the adaptive-COLUMNS logic both read
-# these. Keep in sync with habitat.HABITAT_WIDTH and the bubble height.
+# Pet overlay geometry. The habitat widget renders sprite(7) + name(1) +
+# XP(2) + time(1) + a 7-row bubble reservation in the top-right, totalling
+# 18 rows by 24 cols. The L-reflow screen and the adaptive-COLUMNS logic
+# both read these. Keep in sync with habitat.HABITAT_WIDTH and the bubble
+# height.
 PET_W = 24
-PET_H = 17
+PET_H = 18
 
 def _effective_child_cols(cols: int, went_wide: bool) -> int:
     """How wide should we tell the child (Claude) the terminal is?
@@ -189,9 +190,9 @@ class PtyTerminal(Widget, can_focus=True):
             self._screen = pyte.HistoryScreen(cols, rows, history=2000, ratio=0.15)
         else:
             from lreflow import LReflowHistoryScreen
-            # Reserved rectangle: bubble(7) + sprite(6) + name(1) + xp(2)
-            # + time(1) = 17 rows, 24 cols (HABITAT_WIDTH). Claude's text
-            # wraps at cols-24 in rows 0..16, and at cols from row 17 down.
+            # Reserved rectangle: bubble(7) + sprite(7) + name(1) + xp(2)
+            # + time(1) = 18 rows, 24 cols (HABITAT_WIDTH). Claude's text
+            # wraps at cols-24 in rows 0..17, and at cols from row 18 down.
             # If skills panel is toggled, Claude's text there is occluded
             # under the panel until the user toggles it off — acceptable.
             self._screen = LReflowHistoryScreen(
