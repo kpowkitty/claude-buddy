@@ -77,13 +77,81 @@ async def test_habitat_and_children_are_transparent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_readline_hotkeys_pass_through(monkeypatch, tmp_path) -> None:
+    """The whole point of moving app hotkeys to function keys: Claude's own
+    readline-style Ctrl keys (Ctrl+P previous prompt, Ctrl+B backward-char,
+    Ctrl+S search, etc.) must reach Claude unchanged."""
+    import json
+    import app as _app_mod
+    from pty_terminal import PtyTerminal
+
+    prog_path = tmp_path / "progression.json"
+    prog_path.write_text(json.dumps({
+        "active_id": "kitsune",
+        "buddies": {"kitsune": {"species_id": "kitsune"}},
+        "hatches_performed": 1, "shards": 0,
+    }))
+    monkeypatch.setattr(_app_mod, "PROGRESSION", prog_path)
+
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        pty = app.query_one("#pty", PtyTerminal)
+        writes: list[bytes] = []
+        pty.write_bytes = lambda data: writes.append(data)  # type: ignore[assignment]
+
+        for key, expected in [
+            ("ctrl+p", b"\x10"),   # Claude: previous prompt
+            ("ctrl+b", b"\x02"),   # readline: backward-char
+            ("ctrl+s", b"\x13"),   # readline: forward-search
+            ("ctrl+r", b"\x12"),   # readline: reverse-search
+        ]:
+            await pilot.press(key)
+            await pilot.pause(0.05)
+            assert expected in b"".join(writes), (
+                f"{key} didn't reach Claude as {expected!r}; writes={writes!r}"
+            )
+
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_f1_pets_buddy(monkeypatch, tmp_path) -> None:
+    """F1 replaces Ctrl+P as the pet hotkey. Verify it reaches action_pet."""
+    import json
+    import app as _app_mod
+
+    prog_path = tmp_path / "progression.json"
+    prog_path.write_text(json.dumps({
+        "active_id": "kitsune",
+        "buddies": {"kitsune": {"species_id": "kitsune", "pets_received": 0}},
+        "hatches_performed": 1, "shards": 0,
+    }))
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}")
+    monkeypatch.setattr(_app_mod, "PROGRESSION", prog_path)
+    monkeypatch.setattr(_app_mod, "STATE", state_path)
+
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        await pilot.press("f1")
+        await pilot.pause(0.1)
+        data = json.loads(prog_path.read_text())
+        assert data["buddies"]["kitsune"].get("pets_received", 0) == 1
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
 async def test_toggle_habitat_doesnt_crash() -> None:
     app = BuddyApp(["/bin/echo", "x"])
     async with app.run_test() as pilot:
         await pilot.pause(0.1)
-        await pilot.press("ctrl+b")
+        await pilot.press("f4")
         await pilot.pause(0.1)
-        await pilot.press("ctrl+b")
+        await pilot.press("f4")
         await pilot.pause(0.1)
         assert app.is_running
         await pilot.press("ctrl+q")

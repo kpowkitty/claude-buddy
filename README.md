@@ -15,7 +15,8 @@ A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claud
 
 ## What it does
 
-- **Gacha hatch**: `/buddy hatch` rolls a rarity (common 60% / uncommon 25% / rare 10% / epic 4% / legendary 1%) and a species within that tier. 11 species total.
+- **Gacha hatch**: `/buddy hatch --tokens` rolls a rarity (common 60% / uncommon 25% / rare 10% / epic 4% / legendary 1%) and a species within that tier. 11 species total.
+- **Collection economy**: every 20 pet-levels earns a hatch token (your global level). Rolling a species you already own on `--tokens` burns the token but grants a duplicate shard; 5 shards can be spent via `--shards` for a guaranteed new species.
 - **Skills**: every buddy rolls 8 skill stats (wisdom, debugging, refactoring, etc.). Each species has a baseline range and a signature skill that rolls much higher.
 - **Embedded TUI**: `claude-buddy` launches Claude Code inside a Textual app, with your buddy animated in a side panel reacting to what you're doing.
 - **Hooks**: watches `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart` to shift mood (idle / attentive / watching / sleeping).
@@ -40,7 +41,7 @@ The installer:
 
 If `~/.local/bin` isn't on your PATH, the installer prints a one-liner to add it.
 
-After installing, restart Claude Code so the hooks take effect — Claude reads `~/.claude/settings.json` once at startup, so an already-running session won't see the new hooks. If you skipped the hatch prompt, roll your first buddy with `claude-buddy-hatch` (or `/buddy hatch` inside Claude).
+After installing, restart Claude Code so the hooks take effect — Claude reads `~/.claude/settings.json` once at startup, so an already-running session won't see the new hooks. If you skipped the hatch prompt, roll your first buddy with `claude-buddy-hatch --tokens` (or `/buddy hatch --tokens` inside Claude).
 
 ## Usage
 
@@ -53,17 +54,17 @@ claude-buddy
 Roll a new buddy without opening Claude:
 
 ```bash
-claude-buddy-hatch          # errors if you already have one
-claude-buddy-hatch --peek   # roll without saving
-claude-buddy-hatch --force  # re-roll, discarding current
+claude-buddy-hatch --tokens   # spend a hatch token (dupes burn it and grant a shard)
+claude-buddy-hatch --shards   # spend 5 shards for a guaranteed new species
 ```
 
 Claude Code runs in the main pane; your buddy lives in a panel on the right. Keybindings:
 
 - `Ctrl-Q` — quit
-- `Ctrl-B` — toggle the buddy panel
-- `Ctrl-S` — toggle the skill grid
-- `Ctrl-P` — pet your buddy
+- `F1` — pet your buddy
+- `F2` — open the gacha collection menu
+- `F3` — toggle the skill grid
+- `F4` — toggle the buddy panel
 - **Scroll wheel** — scroll through the Claude pane's history
 - `Shift-PageUp` / `Shift-PageDown` — same, via keyboard
 - `Shift-End` — snap back to the live tail
@@ -71,10 +72,11 @@ Claude Code runs in the main pane; your buddy lives in a panel on the right. Key
 
 Claude Code slash commands (all work while the TUI is running):
 
-- `/buddy hatch` — roll your first buddy
+- `/buddy hatch --tokens` — spend a hatch token (dupes grant a shard)
+- `/buddy hatch --shards` — spend 5 shards for a guaranteed new species
 - `/buddy` — see their card (art, skills, age)
+- `/buddy switch <name>` — make another buddy active (matches name or species)
 - `/buddy name <name>` — name them
-- `/buddy peek` — test-roll without saving (tempting the gacha gods)
 - `/buddy quiet` / `/buddy chatty` — toggle whether they speak
 - `/buddy forget --confirm` — release them so you can hatch a new one
 

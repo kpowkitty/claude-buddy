@@ -23,7 +23,17 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from state import BUDDY_DIR, STATE, PROGRESSION, read_json, write_atomic  # noqa: E402
+from collection import active_buddy, migrate  # noqa: E402
 from personality import for_species  # noqa: E402
+
+
+def _read_active_prog() -> dict | None:
+    """Load progression.json, migrate if needed, return the active buddy
+    dict (flat shape, same as pre-collection callers expected)."""
+    raw = read_json(PROGRESSION, None)
+    if raw is None:
+        return None
+    return active_buddy(migrate(raw))
 
 PREFS = BUDDY_DIR / "prefs.json"
 BASE_RATE = 0.35
@@ -167,7 +177,7 @@ def main() -> int:
         except json.JSONDecodeError:
             pass
 
-    prog = read_json(PROGRESSION, None)
+    prog = _read_active_prog()
     if not prog:
         return 0
     state = read_json(STATE, {})

@@ -19,8 +19,16 @@ sys.path.insert(0, _BUDDY)
 
 from state import STATE, read_json, write_atomic  # noqa: E402
 import state as _state_mod  # noqa: E402
+from collection import active_buddy, migrate  # noqa: E402
 from personality import for_species  # noqa: E402
 import speak  # noqa: E402
+
+
+def _read_active_prog() -> dict | None:
+    raw = read_json(_state_mod.PROGRESSION, None)
+    if raw is None:
+        return None
+    return active_buddy(migrate(raw))
 
 
 class _DraftSlot:
@@ -68,7 +76,7 @@ def build_chirp_loop() -> ChirpLoop:
         write_atomic(STATE, new)
 
     def _roll(event_kind: str) -> bool:
-        prog = read_json(_state_mod.PROGRESSION, None)
+        prog = _read_active_prog()
         if not prog:
             return False
         state = read_json(STATE, {})
@@ -78,7 +86,7 @@ def build_chirp_loop() -> ChirpLoop:
         return random.choice(options) if options else ""
 
     def _kick(target: str, text: str) -> None:
-        prog = read_json(_state_mod.PROGRESSION, None) or {}
+        prog = _read_active_prog() or {}
         pers = for_species(prog.get("species_id", ""))
         system = speak.build_system(prog, pers)
         kind = {
