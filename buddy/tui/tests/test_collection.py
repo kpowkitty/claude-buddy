@@ -14,8 +14,7 @@ if _BUDDY not in sys.path:
     sys.path.insert(0, _BUDDY)
 
 from collection import (  # noqa: E402
-    GLOBAL_LEVEL_RATIO,
-    LEVELS_PER_TOKEN,
+    LEVELS_PER_TOKEN_STEP,
     SHARDS_PER_REDEEM,
     active_buddy,
     add_buddy,
@@ -167,8 +166,7 @@ def test_add_buddy_respects_set_active_false() -> None:
 
 def test_global_level_single_buddy() -> None:
     c = migrate({"species_id": "slime", "level": 10})
-    # level 10 × 0.5 = 5.0
-    assert global_level(c) == 5.0
+    assert global_level(c) == 10
 
 
 def test_global_level_sums_across_buddies() -> None:
@@ -180,19 +178,28 @@ def test_global_level_sums_across_buddies() -> None:
         },
         "hatches_performed": 2, "shards": 0,
     }
-    # (10 + 6) × 0.5 = 8.0
-    assert global_level(c) == 8.0
+    assert global_level(c) == 16
 
 
-def test_tokens_earned_floors_global() -> None:
-    # global 39.9 (pet level 79 with ratio 0.5) → 1 token earned.
-    c = {
-        "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 79}},
-        "hatches_performed": 1, "shards": 0,
-    }
-    assert global_level(c) == 39.5
-    assert tokens_earned(c) == 1
+def test_tokens_earned_triangular_schedule() -> None:
+    """STEP × K(K+1)/2 is the cumulative cost to have earned K tokens."""
+    def one_buddy(level: int) -> dict:
+        return {
+            "active_id": "slime",
+            "buddies": {"slime": {"species_id": "slime", "level": level}},
+            "hatches_performed": 1, "shards": 0,
+        }
+
+    # STEP=5: thresholds are 5, 15, 30, 50, 75.
+    assert tokens_earned(one_buddy(4)) == 0
+    assert tokens_earned(one_buddy(5)) == 1
+    assert tokens_earned(one_buddy(14)) == 1
+    assert tokens_earned(one_buddy(15)) == 2
+    assert tokens_earned(one_buddy(29)) == 2
+    assert tokens_earned(one_buddy(30)) == 3
+    assert tokens_earned(one_buddy(49)) == 3
+    assert tokens_earned(one_buddy(50)) == 4
+    assert tokens_earned(one_buddy(75)) == 5
 
 
 def test_hatches_available_zero_at_install() -> None:
@@ -204,14 +211,12 @@ def test_hatches_available_zero_at_install() -> None:
     assert hatches_available(c) == 0
 
 
-def test_hatches_available_earns_at_global_20() -> None:
+def test_hatches_available_earns_at_first_threshold() -> None:
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 40}},
+        "buddies": {"slime": {"species_id": "slime", "level": 5}},
         "hatches_performed": 1, "shards": 0,
     }
-    # global = 40 × 0.5 = 20 → tokens_earned = 1. starter is free → available = 1.
-    assert global_level(c) == 20.0
     assert tokens_earned(c) == 1
     assert hatches_available(c) == 1
 
@@ -220,24 +225,48 @@ def test_hatches_available_decrements_after_second_hatch() -> None:
     c = {
         "active_id": "slime",
         "buddies": {
-            "slime": {"species_id": "slime", "level": 40},
+            "slime": {"species_id": "slime", "level": 5},
             "ember": {"species_id": "ember", "level": 1},
         },
         "hatches_performed": 2, "shards": 0,
     }
-    # tokens_earned = floor((40+1) × 0.5 / 20) = floor(20.5 / 20) = 1
-    # available = 1 - (2 - 1) = 0
+    # global 6 → still only 1 token earned (next at 15). available = 1 - 1 = 0.
+    assert tokens_earned(c) == 1
     assert hatches_available(c) == 0
 
 
 def test_hatches_available_accumulates() -> None:
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 120}},
+        "buddies": {"slime": {"species_id": "slime", "level": 30}},
         "hatches_performed": 1, "shards": 0,
     }
-    # global 60 → 3 tokens earned. starter free → 3 available.
+    # global 30 → 3 tokens earned (thresholds 5, 15, 30). starter free.
+    assert tokens_earned(c) == 3
     assert hatches_available(c) == 3
+
+
+def test_hoarding_does_not_accelerate() -> None:
+    """The escalation is keyed to (performed + available) = tokens_earned + 1,
+    so a hoarder faces the same curve as someone who spent immediately.
+    Concretely: at global level 30, you've earned exactly 3 tokens whether
+    you spent them or not."""
+    hoarder = {
+        "active_id": "slime",
+        "buddies": {"slime": {"species_id": "slime", "level": 30}},
+        "hatches_performed": 1, "shards": 0,
+    }
+    spender = {
+        "active_id": "d",
+        "buddies": {
+            "a": {"species_id": "a", "level": 10},
+            "b": {"species_id": "b", "level": 10},
+            "c": {"species_id": "c", "level": 5},
+            "d": {"species_id": "d", "level": 5},
+        },
+        "hatches_performed": 4, "shards": 0,
+    }
+    assert tokens_earned(hoarder) == tokens_earned(spender) == 3
 
 
 def test_hatches_available_never_negative() -> None:
@@ -300,6 +329,5 @@ def test_redeem_noop_below_threshold() -> None:
 
 def test_constants_are_locked_in() -> None:
     """If these constants change, the economy changes — tests should notice."""
-    assert GLOBAL_LEVEL_RATIO == 0.5
-    assert LEVELS_PER_TOKEN == 20
+    assert LEVELS_PER_TOKEN_STEP == 5
     assert SHARDS_PER_REDEEM == 5

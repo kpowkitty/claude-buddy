@@ -13,7 +13,7 @@ import sys
 from typing import Optional
 
 from collection import (
-    LEVELS_PER_TOKEN,
+    LEVELS_PER_TOKEN_STEP,
     SHARDS_PER_REDEEM,
     active_buddy,
     all_buddies,
@@ -56,7 +56,7 @@ def _status_block(collection: dict) -> list[str]:
 
     lines.append(
         f"  Collection: {n_buddies} buddy(s)  ·  "
-        f"global lvl {_BOLD}{gl:.1f}{_RESET}  ·  "
+        f"global lvl {_BOLD}{gl}{_RESET}  ·  "
         f"tokens {tokens_earned(collection)}  ·  "
         f"shards {sh}"
     )
@@ -66,10 +66,11 @@ def _status_block(collection: dict) -> list[str]:
             f"  {_CYAN}{available} hatch(es) ready — run: claude-buddy-hatch --tokens{_RESET}"
         )
     else:
-        # Explain how far from the next token.
-        next_token_at = (tokens_earned(collection) + 1) * LEVELS_PER_TOKEN
-        from collection import GLOBAL_LEVEL_RATIO
-        pet_levels_needed = max(0, int((next_token_at - gl) / GLOBAL_LEVEL_RATIO + 0.9999))
+        # Explain how far from the next token. The (K+1)-th token's
+        # cumulative cost is STEP × (K+1)(K+2)/2 total pet levels.
+        k = tokens_earned(collection)
+        next_token_at = LEVELS_PER_TOKEN_STEP * (k + 1) * (k + 2) // 2
+        pet_levels_needed = max(0, next_token_at - gl)
         lines.append(
             f"  {_DIM}No hatches available. Next token in ~{pet_levels_needed} more pet-level(s).{_RESET}"
         )

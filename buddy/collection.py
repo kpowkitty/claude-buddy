@@ -21,8 +21,13 @@ from typing import Optional
 
 # ── economy constants (tuneable) ─────────────────────────────────────────────
 
-GLOBAL_LEVEL_RATIO = 0.5        # 1 pet-level → 0.5 global levels
-LEVELS_PER_TOKEN = 20           # earn a hatch token every N global levels
+# Escalating token schedule: the Nth token costs LEVELS_PER_TOKEN_STEP × N
+# pet levels on top of the previous tokens' cost. So token 1 costs 5 levels,
+# token 2 costs 10 more (15 total), token 3 costs 15 more (30 total)...
+# Closes the hoarding loophole by keying escalation to (performed +
+# available) = tokens_earned + 1, which simplifies to a triangular curve
+# against total pet levels.
+LEVELS_PER_TOKEN_STEP = 5
 SHARDS_PER_REDEEM = 5           # duplicate shards → 1 guaranteed new-species roll
 
 
@@ -154,23 +159,35 @@ def add_buddy(collection: dict, buddy_id: str, entry: dict, *, set_active_to_new
 
 # ── derived values (pure functions of the stored collection) ─────────────────
 
-def global_level(collection: dict) -> float:
-    """sum of every buddy's level × GLOBAL_LEVEL_RATIO.
-
-    Float so small increments (1 pet-level → 0.5 global) are representable.
-    """
-    total = sum(int(b.get("level", 1)) for b in all_buddies(collection))
-    return total * GLOBAL_LEVEL_RATIO
+def global_level(collection: dict) -> int:
+    """Sum of every buddy's pet level — the roster's combined progress."""
+    return sum(int(b.get("level", 1)) for b in all_buddies(collection))
 
 
 def tokens_earned(collection: dict) -> int:
     """Total hatch tokens the user has ever earned via leveling.
 
-    Starter is a gift, so `hatches_available` adds +1 to offset the
-    starter-incremented `hatches_performed`. That accounting lives in
-    `hatches_available`, not here — this is just the earned count.
+    Uses a triangular schedule: token K is awarded once the total pet
+    levels reach STEP × K × (K+1) / 2. That's equivalent to each new
+    token costing STEP × (tokens_earned + 1) extra levels, with
+    (tokens_earned + 1) = (hatches_performed + hatches_available) —
+    so a hoarder who sits on unspent tokens faces the same escalation
+    curve as someone who spent them immediately.
+
+    Starter is a gift, so `hatches_available` offsets by -(performed-1).
+    That accounting lives in `hatches_available`, not here.
     """
-    return int(math.floor(global_level(collection) / LEVELS_PER_TOKEN))
+    total = global_level(collection)
+    if total <= 0:
+        return 0
+    # Largest K with STEP × K(K+1)/2 ≤ total.
+    # Solving: K ≤ (-1 + sqrt(1 + 8·total/STEP)) / 2.
+    k = int((-1 + math.sqrt(1 + 8 * total / LEVELS_PER_TOKEN_STEP)) / 2)
+    # Guard against floating-point shave (e.g. sqrt returning 1.9999...
+    # for an exact-boundary total): check whether K+1 also fits.
+    if LEVELS_PER_TOKEN_STEP * (k + 1) * (k + 2) // 2 <= total:
+        k += 1
+    return k
 
 
 def hatches_available(collection: dict) -> int:

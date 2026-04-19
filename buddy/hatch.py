@@ -28,8 +28,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from cli_help import print_help, print_test_mode_banner  # noqa: E402
 from collection import (  # noqa: E402
-    GLOBAL_LEVEL_RATIO,
-    LEVELS_PER_TOKEN,
+    LEVELS_PER_TOKEN_STEP,
     SHARDS_PER_REDEEM,
     active_buddy,
     add_buddy,
@@ -162,18 +161,16 @@ def render_reveal(rarity: str, species: dict, skills: dict) -> str:
 def _next_token_message(collection: dict) -> str:
     """Human-friendly 'you're N pet-levels away from the next token' line.
 
-    Global level = sum(pet_levels) * GLOBAL_LEVEL_RATIO. A token unlocks
-    every LEVELS_PER_TOKEN global levels. Invert to get how many more pet
-    levels you need.
+    Global level = sum of pet levels across the roster. Tokens follow a
+    triangular schedule: the (K+1)-th token is awarded when global level
+    reaches STEP × (K+1)(K+2)/2.
     """
     gl = global_level(collection)
     earned = tokens_earned(collection)
-    next_token_at_global = (earned + 1) * LEVELS_PER_TOKEN
-    levels_needed = (next_token_at_global - gl) / GLOBAL_LEVEL_RATIO
-    # ceil without importing math
-    levels_needed = int(levels_needed) + (0 if levels_needed == int(levels_needed) else 1)
+    next_token_at = LEVELS_PER_TOKEN_STEP * (earned + 1) * (earned + 2) // 2
+    levels_needed = max(0, next_token_at - gl)
     return (
-        f"Your global level is {gl:.1f}. You've earned {earned} token(s) so far. "
+        f"Your global level is {gl}. You've earned {earned} token(s) so far. "
         f"The next token unlocks in ~{levels_needed} more pet-level(s)."
     )
 
