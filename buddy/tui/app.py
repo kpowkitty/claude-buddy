@@ -16,7 +16,7 @@ from typing import Sequence
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer
+from textual.widgets import Footer, Static
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BUDDY = os.path.dirname(_HERE)
@@ -24,17 +24,30 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, _BUDDY)
 
 from chirp_loop_wiring import build_chirp_loop  # noqa: E402
+from collection import active_buddy, migrate  # noqa: E402
+from gacha_menu import GachaMenu  # noqa: E402
 from habitat import Habitat, HABITAT_WIDTH  # noqa: E402
 from input_map import key_to_bytes  # noqa: E402
 from personality import for_species  # noqa: E402
 from pty_terminal import PtyTerminal  # noqa: E402
 import speak  # noqa: E402
-from state import BUDDY_DIR, PROGRESSION, STATE, read_json, write_atomic  # noqa: E402
+from state import BUDDY_DIR, IS_TEST_MODE, PROGRESSION, STATE, read_json, write_atomic  # noqa: E402
+
+
+def _read_active_prog() -> dict | None:
+    raw = read_json(PROGRESSION, None)
+    if raw is None:
+        return None
+    return active_buddy(migrate(raw))
 
 _BUDDY_DIR = pathlib.Path(BUDDY_DIR)
 
 
 class BuddyApp(App):
+    # Textual reserves Ctrl+P for its command palette; we want Ctrl+P for
+    # petting the buddy, so turn the palette off.
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = f"""
     Screen {{
         layout: horizontal;
@@ -51,13 +64,28 @@ class BuddyApp(App):
         dock: bottom;
         background: rgba(0, 0, 0, 0);
     }}
+    #test-mode-banner {{
+        dock: top;
+        height: 1;
+        background: red;
+        color: white;
+        text-style: bold;
+        content-align: center middle;
+    }}
     """
 
+    # Function keys are the safe pick for app hotkeys — Claude Code
+    # (and readline-style consoles generally) never bind them, so our
+    # keys never fight Claude's input muscle memory.
+    # Ctrl+Q stays because quitting an embedded-terminal TUI is a
+    # near-universal convention; users expect the whole app to close,
+    # not the inner shell's own Ctrl+Q.
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", show=True),
-        Binding("ctrl+b", "toggle_habitat", "Toggle buddy", show=True),
-        Binding("ctrl+s", "toggle_skills", "Skills", show=True),
-        Binding("ctrl+p", "pet", "Pet", show=True),
+        Binding("f1", "pet", "Pet", show=True),
+        Binding("f2", "gacha", "Gacha", show=True),
+        Binding("f3", "toggle_skills", "Skills", show=True),
+        Binding("f4", "toggle_habitat", "Toggle buddy", show=True),
     ]
 
     def __init__(self, command: Sequence[str], **kwargs) -> None:
@@ -71,6 +99,13 @@ class BuddyApp(App):
         self._typed_line: str = ""
 
     def compose(self) -> ComposeResult:
+        if IS_TEST_MODE:
+            # Loud red bar pinned to the top so you never forget you're
+            # operating on a throwaway progression file.
+            yield Static(
+                f" ⚠  TEST MODE  ·  state dir: {BUDDY_DIR}  ⚠ ",
+                id="test-mode-banner",
+            )
         with Horizontal():
             yield PtyTerminal(self._command, id="pty")
             yield Habitat(id="habitat")
@@ -94,18 +129,56 @@ class BuddyApp(App):
     def action_toggle_skills(self) -> None:
         self.query_one("#habitat", Habitat).toggle_skills()
 
+    def action_gacha(self) -> None:
+        """Open the gacha collection menu (full roster, rarity-grouped)."""
+        self.push_screen(GachaMenu())
+
+    # How long the "petted" mood + prrr speech persists. Bump this if the
+    # purr feels too brief, or wire it to a personality trait later.
+    PET_REACTION_SECONDS = 2.0
+
     def action_pet(self) -> None:
-        # Bump the pet counter. Chirping on pet re-lands in v2 alongside
-        # other user-triggered events flowing through the chirp_loop.
-        prog = read_json(PROGRESSION, {})
-        if not prog.get("species_id"):
+        """Pet the active buddy.
+
+        Three visible effects:
+          1. pets_received counter ticks up on the buddy.
+          2. `petted_until` in state.json makes derive_mood return 'petted'
+             for PET_REACTION_SECONDS (closes eyes + smiles via sprite swap).
+          3. Speech bubble says "prrr" for the same window.
+        """
+        raw = read_json(PROGRESSION, None)
+        if raw is None:
             return
-        prog["pets_received"] = int(prog.get("pets_received", 0)) + 1
-        write_atomic(PROGRESSION, prog)
+        collection = migrate(raw)
+        active_id = collection.get("active_id")
+        buddy = active_buddy(collection)
+        if not active_id or buddy is None:
+            return
+
+        buddy = dict(buddy)
+        buddy["pets_received"] = int(buddy.get("pets_received", 0)) + 1
+        collection["buddies"] = dict(collection.get("buddies", {}))
+        collection["buddies"][active_id] = buddy
+        write_atomic(PROGRESSION, collection)
+
+        now = time.time()
+        state = read_json(STATE, {}) or {}
+        state["petted_until"] = now + self.PET_REACTION_SECONDS
+        state["speech"] = "prrr"
+        state["speech_ts"] = now
+        state["last_speech_ts"] = now
+        write_atomic(STATE, state)
 
     # ── input routing ──────────────────────────────────────────────────────
 
     async def on_key(self, event) -> None:
+        # If a modal (e.g. the gacha menu) is on top of the screen stack,
+        # the modal owns the keyboard. We must not forward anything to
+        # the pty — otherwise Claude sees the user's menu navigation.
+        from textual.screen import ModalScreen
+        if isinstance(self.screen, ModalScreen):
+            return
+
         # Shift+PageUp/Down page the local scrollback. Shift+End returns
         # to the live tail. Plain PageUp/Down/End still pass through so
         # Claude keeps its own navigation.
@@ -142,11 +215,40 @@ class BuddyApp(App):
             event.stop()
             return
 
+        # Don't forward our own app-level hotkeys to the pty — otherwise
+        # Claude sees the raw control byte too (e.g. Ctrl+P lands as \x10
+        # and triggers Claude's previous-prompt history).
+        if event.key in {b.key for b in self.BINDINGS}:
+            return
+
         data = key_to_bytes(event)
         if data is None:
             return
         self._update_typed_line(event)
         pty.write_bytes(data)
+        event.stop()
+
+    async def on_paste(self, event) -> None:
+        """Forward pasted text to the child as a bracketed paste.
+
+        Textual emits Paste events separately from Key events, so they never
+        reach on_key — without this handler, pastes silently vanish. Wrapping
+        in \\x1b[200~ ... \\x1b[201~ lets Claude tell pasted content apart from
+        typed content (prevents a multi-line paste being processed as a bunch
+        of Enter presses).
+        """
+        # Modal on top owns input — don't bleed paste bytes to the pty.
+        from textual.screen import ModalScreen
+        if isinstance(self.screen, ModalScreen):
+            return
+        text = event.text
+        if not text:
+            return
+        pty = self.query_one("#pty", PtyTerminal)
+        # Keep our typed-line buffer in sync so a paste that starts with
+        # `~{name}` still routes correctly on a subsequent Enter.
+        self._typed_line += text
+        pty.write_bytes(b"\x1b[200~" + text.encode("utf-8", errors="replace") + b"\x1b[201~")
         event.stop()
 
     # ── buddy talk intercept ──────────────────────────────────────────────
@@ -170,7 +272,7 @@ class BuddyApp(App):
             self._typed_line += ch
 
     def _buddy_name(self) -> str:
-        prog = read_json(PROGRESSION, {}) or {}
+        prog = _read_active_prog() or {}
         return (prog.get("name") or prog.get("species_name") or "").strip()
 
     def _is_buddy_message(self, line: str) -> bool:
@@ -185,7 +287,7 @@ class BuddyApp(App):
     def _fire_buddy_reply(self, message: str) -> None:
         """Fire-and-forget: ask Claude (as the buddy) to reply. Writes the
         result to state.json's speech field so the existing bubble surfaces it."""
-        prog = read_json(PROGRESSION, {}) or {}
+        prog = _read_active_prog() or {}
         species_id = prog.get("species_id")
         if not species_id:
             return

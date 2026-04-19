@@ -8,10 +8,12 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from cli_help import print_help, print_test_mode_banner  # noqa: E402
+from collection import active_buddy, migrate  # noqa: E402
 from hatch import RARITY_COLOR, RESET, BOLD, DIM, format_skills  # noqa: E402
 from species import find_species  # noqa: E402
 
-PROGRESSION = pathlib.Path.home() / ".claude" / "buddy" / "progression.json"
+from state import PROGRESSION  # noqa: E402 — honors BUDDY_STATE_DIR
 
 
 def humanize_age(seconds: float) -> str:
@@ -25,21 +27,33 @@ def humanize_age(seconds: float) -> str:
 
 
 def main() -> int:
+    print_test_mode_banner()
+    if set(sys.argv[1:]) & {"--help", "-h"}:
+        collection = None
+        if PROGRESSION.exists():
+            try:
+                collection = migrate(json.loads(PROGRESSION.read_text()))
+            except json.JSONDecodeError:
+                pass
+        print_help(collection)
+        return 0
     if not PROGRESSION.exists():
-        print("You don't have a buddy yet. Run `/buddy hatch` to get one.")
+        print_help(None, header="You don't have a buddy yet.")
         return 1
     try:
-        data = json.loads(PROGRESSION.read_text())
+        raw = json.loads(PROGRESSION.read_text())
     except json.JSONDecodeError:
-        print("Your buddy's save file is corrupted. Run `/buddy forget --confirm` then `/buddy hatch`.")
+        print_help(None, header="Your buddy's save file is corrupted. Run `/buddy forget --confirm`, then hatch.")
         return 1
+    collection = migrate(raw)
+    data = active_buddy(collection) or {}
     species_id = data.get("species_id")
     if not species_id:
-        print("Your buddy's save file is from an older version. Run `/buddy forget --confirm` then `/buddy hatch`.")
+        print_help(collection, header="Your save file has no active buddy.")
         return 1
     rarity, species = find_species(species_id)
     if species is None:
-        print(f"Unknown species id: {species_id}. Run `/buddy forget --confirm` then `/buddy hatch`.")
+        print_help(collection, header=f"Unknown species id: {species_id}.")
         return 1
 
     color = RARITY_COLOR[rarity]

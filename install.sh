@@ -25,6 +25,8 @@ LAUNCHER_SRC="${REPO_ROOT}/bin/claude-buddy"
 LAUNCHER_DST="${HOME}/.local/bin/claude-buddy"
 HATCH_SRC="${REPO_ROOT}/bin/claude-buddy-hatch"
 HATCH_DST="${HOME}/.local/bin/claude-buddy-hatch"
+TESTS_SRC="${REPO_ROOT}/buddy/tests/run"
+TESTS_DST="${HOME}/.local/bin/claude-buddy-tests"
 
 echo "Installing claude-buddy from ${REPO_ROOT}..."
 
@@ -89,8 +91,10 @@ PYEOF
 mkdir -p "$(dirname "${LAUNCHER_DST}")"
 ln -sf "${LAUNCHER_SRC}" "${LAUNCHER_DST}"
 ln -sf "${HATCH_SRC}" "${HATCH_DST}"
+ln -sf "${TESTS_SRC}" "${TESTS_DST}"
 echo "Symlinked ${LAUNCHER_DST} → ${LAUNCHER_SRC}"
 echo "Symlinked ${HATCH_DST} → ${HATCH_SRC}"
+echo "Symlinked ${TESTS_DST} → ${TESTS_SRC}"
 
 # PATH check
 case ":${PATH}:" in
@@ -110,10 +114,12 @@ if [[ -t 0 ]]; then
     answer="${answer:-Y}"
     if [[ "${answer}" =~ ^[Yy] ]]; then
         echo
-        if "${REPO_ROOT}/bin/claude-buddy-hatch"; then
+        # --tokens on a fresh collection is the starter gift (no token needed
+        # until the user has at least one buddy).
+        if "${REPO_ROOT}/bin/claude-buddy-hatch" --tokens; then
             hatched=1
         else
-            echo "(hatch failed — you can try again later with: claude-buddy-hatch)" >&2
+            echo "(hatch failed — you can try again later with: claude-buddy-hatch --tokens)" >&2
         fi
     fi
 else
@@ -140,8 +146,8 @@ else
     echo "Next:"
     echo "  1. Restart Claude Code so hooks load — it reads ~/.claude/settings.json"
     echo "     once at startup, so a running session won't see the new hooks."
-    echo "  2. Hatch a buddy:  ${hatch_cmd}"
-    echo "     (or inside Claude Code: /buddy hatch)"
+    echo "  2. Hatch a buddy:  ${hatch_cmd} --tokens"
+    echo "     (or inside Claude Code: /buddy hatch --tokens)"
     echo "  3. Launch the TUI with:  ${launcher_cmd}"
 fi
 

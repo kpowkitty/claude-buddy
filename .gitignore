@@ -9,3 +9,6 @@ __pycache__/
 
 # Test caches
 .pytest_cache/
+
+# Throwaway sim-test env (created by buddy/tests/run)
+buddy/tests/env/

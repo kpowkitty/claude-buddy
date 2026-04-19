@@ -14,6 +14,19 @@ from species import find_species
 _EYE_PAIRS = ["o o", "O O", "o.o", "O.O", "o,o", "O,O", "O , O", "o   o", "O  O"]
 _EYE_SINGLE = ["o", "O"]
 
+# Best-effort mouth → smile swaps for the `petted` mood. Applied in order,
+# all matches replaced. Species with no recognisable mouth just stay as-is
+# (still get closed eyes + prrr bubble). Per-species overrides can come later.
+#
+# NOTE on what is and isn't a mouth: `> v <` on kitsune is paws holding
+# something, not a mouth. `/v\` on owlet is a beak. Conservative list
+# intentionally — better to miss a smile than swap a body part.
+_PETTED_MOUTH_SWAPS = [
+    ("^.^", "^‿^"),           # kitsune: eyes stay happy, the `.` between
+                               # them (which is the mouth) becomes a smile.
+    ("\\VV/", "\\uu/"),       # dragonling
+]
+
 
 def _sub_eyes(lines, new_eye_char):
     """Replace eye characters with given char, preserving spacing."""
@@ -95,6 +108,16 @@ def frames_for(species_id: str, mood: str):
         tired = _sub_eyes(base, "-")
         f_a = _add_overlay(tired, "zZz")
         f_b = _add_overlay(tired, " zZ ")
+    elif mood == "petted":
+        # Closed eyes + best-effort smile. Both frames identical so the
+        # buddy reads as "still, content" rather than blinking. Speech
+        # bubble ("prrr") is handled by app.action_pet, not here.
+        # `^` eyes (kitsune, moth) are already happy — leave them alone;
+        # o-style eyes close to `-`.
+        closed = _sub_eyes(base, "-")
+        smiled = _mouth_sub(closed, _PETTED_MOUTH_SWAPS)
+        f_a = smiled
+        f_b = smiled
     else:
         f_a = list(base)
         f_b = _sub_eyes(base, "-")
@@ -109,6 +132,12 @@ def frames_for(species_id: str, mood: str):
             f_b = _add_overlay(_apply_tail_b(_sub_eyes(base, "*"), species), " * . ")
         elif mood == "sleeping":
             f_b = _add_overlay(_apply_tail_b(_sub_eyes(base, "-"), species), " zZ ")
+        elif mood == "petted":
+            # Keep the "still / content" read — both frames identical, just
+            # with the tail wagging underneath.
+            closed = _sub_eyes(_apply_tail_b(base, species), "-")
+            wag = _mouth_sub(closed, _PETTED_MOUTH_SWAPS)
+            f_b = wag
         else:
             f_b = _apply_tail_b(f_b, species)
     return [f_a, f_b]

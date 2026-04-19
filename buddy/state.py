@@ -4,11 +4,24 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import sys
 import time
 
-BUDDY_DIR = pathlib.Path.home() / ".claude" / "buddy"
+# BUDDY_STATE_DIR env var lets you point every script at a throwaway
+# directory (see buddy/tests/) so simulation test runs don't touch your
+# real save files. Leave unset for normal operation.
+_DEFAULT_BUDDY_DIR = pathlib.Path.home() / ".claude" / "buddy"
+BUDDY_DIR = pathlib.Path(os.environ["BUDDY_STATE_DIR"]).expanduser() if os.environ.get("BUDDY_STATE_DIR") else _DEFAULT_BUDDY_DIR
 STATE = BUDDY_DIR / "state.json"
 PROGRESSION = BUDDY_DIR / "progression.json"
+
+IS_TEST_MODE = bool(os.environ.get("BUDDY_STATE_DIR"))
+
+# Make `collection` importable from any of our scripts whether they were
+# invoked from this directory or elsewhere.
+_HERE = pathlib.Path(__file__).parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 
 def read_json(path: pathlib.Path, default=None):
@@ -48,28 +61,64 @@ def push_event(event: dict) -> None:
     write_atomic(STATE, s)
 
 
+def read_collection() -> dict:
+    """Read progression.json and migrate old single-buddy shape on the fly.
+
+    Always returns a dict in the collection shape. If the file doesn't exist
+    or is empty, returns an empty collection. Added for the gacha-collection
+    refactor; existing single-buddy callers still use read_json(PROGRESSION).
+    Step 2 migrates the callers; until then this lives alongside.
+    """
+    from collection import migrate  # local import to avoid cycle at module load
+    raw = read_json(PROGRESSION, {})
+    return migrate(raw or {})
+
+
+def write_collection(collection: dict) -> None:
+    """Persist a collection-shaped dict to progression.json."""
+    write_atomic(PROGRESSION, collection)
+
+
 def bump_progression(**deltas) -> dict:
-    """Add deltas to counters in progression.json. Returns new progression."""
-    p = read_json(PROGRESSION, None)
-    if p is None:
+    """Add deltas to counters on the ACTIVE buddy. Returns the new collection.
+
+    Pre-collection callers used this to increment per-buddy fields like
+    `pets_received`. Semantically unchanged: deltas land on the active
+    buddy's entry, not on collection-level counters.
+    """
+    from collection import active_buddy, migrate  # local import avoids cycle
+
+    raw = read_json(PROGRESSION, None)
+    if raw is None:
         return {}
+    collection = migrate(raw)
+    active_id = collection.get("active_id")
+    buddy = active_buddy(collection)
+    if not active_id or buddy is None:
+        return collection
+    buddy = dict(buddy)
     for key, delta in deltas.items():
-        p[key] = p.get(key, 0) + delta
-    write_atomic(PROGRESSION, p)
-    return p
+        buddy[key] = buddy.get(key, 0) + delta
+    collection["buddies"] = dict(collection.get("buddies", {}))
+    collection["buddies"][active_id] = buddy
+    write_atomic(PROGRESSION, collection)
+    return collection
 
 
 def derive_mood(state: dict) -> str:
     """Compute mood from state + timing.
 
-    Uses an explicit `watching_until` timestamp so buddy stays in `watching`
-    for the whole span from first pre_tool to response stop, not just the
-    moment a hook fires.
+    Uses explicit deadline timestamps (`watching_until`, `petted_until`) so
+    short-lived moods persist across renders rather than flickering on the
+    single tick a hook fires.
 
-    Returns one of: idle | attentive | watching | sleeping.
+    Returns one of: idle | attentive | watching | sleeping | petted.
     (celebrating is reserved for rare events, not routine stops.)
     """
     now = time.time()
+    petted_until = state.get("petted_until", 0)
+    if now < petted_until:
+        return "petted"
     watching_until = state.get("watching_until", 0)
     if now < watching_until:
         return "watching"

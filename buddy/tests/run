@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# claude-buddy-tests — toggle a throwaway sim-test environment.
+#
+# Usage (MUST be sourced — sets BUDDY_STATE_DIR in your parent shell):
+#
+#   source claude-buddy-tests                # toggle on with empty fixture,
+#                                              OR toggle off if already on
+#   source claude-buddy-tests <fixture>      # seed a specific fixture
+#                                              (empty|two-buddies|ready-to-hatch|five-shards)
+#
+# When active, all buddy commands + the TUI read/write under the sim env
+# (./buddy/tests/env) instead of ~/.claude/buddy/. A loud red banner
+# appears in every CLI output and at the top of the TUI.
+
+# Detect sourced vs executed. Works in both bash and zsh.
+# - bash: BASH_SOURCE[0] exists and differs from $0 when sourced.
+# - zsh:  ZSH_EVAL_CONTEXT ends in ":file" when sourced.
+_sourced=0
+if [ -n "${BASH_SOURCE:-}" ]; then
+    # bash path
+    # shellcheck disable=SC2128
+    if [ "${BASH_SOURCE}" != "$0" ]; then
+        _sourced=1
+        _script="${BASH_SOURCE}"
+    fi
+elif [ -n "${ZSH_EVAL_CONTEXT:-}" ]; then
+    case "$ZSH_EVAL_CONTEXT" in
+        *:file) _sourced=1; _script="${(%):-%N}" ;;
+    esac
+fi
+if [ "$_sourced" != "1" ]; then
+    # Crucial: never `exit` from a script users may source — if they
+    # DID source it, `exit` kills the terminal. `return` fails cleanly
+    # from an executed script (it's an error, but not a terminal-killer).
+    echo "claude-buddy-tests: must be sourced, not executed." >&2
+    echo "  source claude-buddy-tests [fixture]" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
+# Resolve the repo root by walking up from this script's path. Handles
+# symlinks (the installer symlinks this into ~/.local/bin).
+while [ -L "$_script" ]; do
+    _target="$(readlink "$_script")"
+    case "$_target" in
+        /*) _script="$_target" ;;
+        *)  _script="$(cd -- "$(dirname -- "$_script")" && pwd)/$_target" ;;
+    esac
+done
+_SIM_DIR="$(cd -- "$(dirname -- "$_script")" && pwd)"
+_FIXTURES_DIR="${_SIM_DIR}/fixtures"
+_ENV_DIR="${_SIM_DIR}/env"
+
+_arg="${1:-}"
+
+# Toggle logic:
+#   already-on + no arg  → tear down
+#   already-on + arg     → re-seed with new fixture (stay on)
+#   off + arg (or no-arg)→ set up with that fixture (default: empty)
+if [ -n "${BUDDY_STATE_DIR:-}" ] && [ -z "$_arg" ]; then
+    # ── TEAR DOWN ────────────────────────────────────────────────────────
+    echo "claude-buddy-tests: tearing down test env at ${BUDDY_STATE_DIR}"
+    rm -rf -- "${BUDDY_STATE_DIR}"
+    unset BUDDY_STATE_DIR
+    echo "claude-buddy-tests: off."
+    unset _script _SIM_DIR _FIXTURES_DIR _ENV_DIR _arg _sourced _target
+    return 0 2>/dev/null || true
+fi
+
+# ── SET UP / RE-SEED ────────────────────────────────────────────────────
+_fixture="${_arg:-empty}"
+_fixture_file="${_FIXTURES_DIR}/${_fixture}.json"
+if [ ! -f "$_fixture_file" ]; then
+    echo "claude-buddy-tests: unknown fixture '${_fixture}'" >&2
+    echo "  available: $(ls "${_FIXTURES_DIR}" | sed 's/\.json$//' | tr '\n' ' ')" >&2
+    unset _script _SIM_DIR _FIXTURES_DIR _ENV_DIR _arg _fixture _fixture_file _sourced _target
+    return 1 2>/dev/null || true
+fi
+
+mkdir -p "${_ENV_DIR}"
+cp "${_fixture_file}" "${_ENV_DIR}/progression.json"
+# Empty state — the hooks / TUI will populate as needed.
+printf '%s\n' '{}' > "${_ENV_DIR}/state.json"
+
+export BUDDY_STATE_DIR="${_ENV_DIR}"
+echo "claude-buddy-tests: ON"
+echo "  fixture:  ${_fixture}"
+echo "  env dir:  ${BUDDY_STATE_DIR}"
+echo "  tear down with: source claude-buddy-tests"
+
+unset _script _SIM_DIR _FIXTURES_DIR _ENV_DIR _arg _fixture _fixture_file _sourced _target
+return 0 2>/dev/null || true

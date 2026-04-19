@@ -1,0 +1,57 @@
+{
+  "active_id": "slime",
+  "buddies": {
+    "slime": {
+      "species_id": "slime",
+      "species_name": "Slime",
+      "rarity": "common",
+      "flavor": "A gelatinous companion. Low-maintenance, high vibes.",
+      "signature_skill": "patience",
+      "skills": {
+        "wisdom": 30,
+        "debugging": 25,
+        "refactoring": 30,
+        "testing": 25,
+        "documentation": 30,
+        "speed": 25,
+        "creativity": 30,
+        "patience": 65
+      },
+      "name": "blob",
+      "hatched_at": 1700000000,
+      "first_seen": 1700000000,
+      "total_prompts": 12,
+      "total_tools": 30,
+      "stage": "baby",
+      "level": 5,
+      "xp": 250
+    },
+    "ember": {
+      "species_id": "ember",
+      "species_name": "Ember",
+      "rarity": "rare",
+      "flavor": "A flickering flame with a face. Warm to the touch.",
+      "signature_skill": "speed",
+      "skills": {
+        "wisdom": 40,
+        "debugging": 40,
+        "refactoring": 40,
+        "testing": 40,
+        "documentation": 40,
+        "speed": 75,
+        "creativity": 40,
+        "patience": 40
+      },
+      "name": null,
+      "hatched_at": 1700001000,
+      "first_seen": 1700001000,
+      "total_prompts": 5,
+      "total_tools": 10,
+      "stage": "baby",
+      "level": 2,
+      "xp": 40
+    }
+  },
+  "hatches_performed": 2,
+  "shards": 0
+}

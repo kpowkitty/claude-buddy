@@ -1,0 +1,32 @@
+{
+  "active_id": "slime",
+  "buddies": {
+    "slime": {
+      "species_id": "slime",
+      "species_name": "Slime",
+      "rarity": "common",
+      "flavor": "A gelatinous companion. Low-maintenance, high vibes.",
+      "signature_skill": "patience",
+      "skills": {
+        "wisdom": 30,
+        "debugging": 25,
+        "refactoring": 30,
+        "testing": 25,
+        "documentation": 30,
+        "speed": 25,
+        "creativity": 30,
+        "patience": 65
+      },
+      "name": "blob",
+      "hatched_at": 1700000000,
+      "first_seen": 1700000000,
+      "total_prompts": 40,
+      "total_tools": 120,
+      "stage": "baby",
+      "level": 10,
+      "xp": 1000
+    }
+  },
+  "hatches_performed": 6,
+  "shards": 5
+}

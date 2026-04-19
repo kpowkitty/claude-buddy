@@ -23,10 +23,11 @@ _HERE = Path(__file__).resolve().parent
 _BUDDY = _HERE.parent
 sys.path.insert(0, str(_BUDDY))
 from state import derive_mood  # noqa: E402
+from collection import active_buddy, migrate  # noqa: E402
 
-# Default file paths (overridable via args, mostly for tests).
-_DEFAULT_STATE = Path.home() / ".claude" / "buddy" / "state.json"
-_DEFAULT_PROGRESSION = Path.home() / ".claude" / "buddy" / "progression.json"
+# Default file paths honour BUDDY_STATE_DIR so sim-test runs redirect
+# automatically. Overridable via args (used by pytest).
+from state import STATE as _DEFAULT_STATE, PROGRESSION as _DEFAULT_PROGRESSION  # noqa: E402
 
 _SPEECH_TTL = 12  # seconds; matches buddy.py
 _ACTIVITY_TAU = 30  # seconds; decay time constant for activity_rate
@@ -77,7 +78,10 @@ def read_view(
     """Read both files and compose a BuddyView."""
     now = time.time() if now is None else now
     state = _read_json(Path(state_path))
-    prog = _read_json(Path(progression_path))
+    raw_prog = _read_json(Path(progression_path))
+    # Always migrate — handles both collection shape and legacy single-buddy.
+    # active_buddy() returns the flat dict the rest of this function expects.
+    prog = active_buddy(migrate(raw_prog)) or {}
 
     has_buddy = bool(prog.get("species_id"))
 

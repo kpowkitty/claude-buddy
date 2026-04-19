@@ -6,12 +6,15 @@ Claude's input box is cleared with Ctrl+U so it never processes the line.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+import app as _app_mod
 from app import BuddyApp
 from pty_terminal import PtyTerminal
 
@@ -81,6 +84,75 @@ def test_is_buddy_message_empty_name_never_matches() -> None:
     assert app._is_buddy_message("~hi") is False
 
 
+# ─── _buddy_name reads real progression file (collection + legacy) ──────────
+
+
+def _patch_progression(monkeypatch, tmp_path: Path, payload: dict) -> Path:
+    """Write `payload` as progression.json in tmp_path and redirect the
+    PROGRESSION module constant to point at it."""
+    prog_file = tmp_path / "progression.json"
+    prog_file.write_text(json.dumps(payload))
+    monkeypatch.setattr(_app_mod, "PROGRESSION", prog_file)
+    return prog_file
+
+
+def test_buddy_name_reads_from_legacy_single_buddy_shape(monkeypatch, tmp_path) -> None:
+    """Regression: when progression.json is still in the old single-buddy
+    shape (species_id at top level), _buddy_name must still return the name.
+    This is the bug that broke ~quine routing after the step-2 refactor."""
+    _patch_progression(monkeypatch, tmp_path, {
+        "species_id": "kitsune",
+        "species_name": "Kitsune",
+        "name": "quine",
+    })
+    app = BuddyApp(["/bin/cat"])
+    assert app._buddy_name() == "quine"
+
+
+def test_buddy_name_reads_from_collection_shape(monkeypatch, tmp_path) -> None:
+    _patch_progression(monkeypatch, tmp_path, {
+        "active_id": "kitsune",
+        "buddies": {
+            "kitsune": {"species_id": "kitsune", "species_name": "Kitsune", "name": "quine"},
+        },
+        "hatches_performed": 1,
+        "shards": 0,
+    })
+    app = BuddyApp(["/bin/cat"])
+    assert app._buddy_name() == "quine"
+
+
+def test_buddy_name_falls_back_to_species_name_when_unnamed(monkeypatch, tmp_path) -> None:
+    _patch_progression(monkeypatch, tmp_path, {
+        "species_id": "slime",
+        "species_name": "Slime",
+        "name": None,
+    })
+    app = BuddyApp(["/bin/cat"])
+    assert app._buddy_name() == "Slime"
+
+
+def test_buddy_name_empty_when_no_progression_file(monkeypatch, tmp_path) -> None:
+    missing = tmp_path / "nope.json"
+    monkeypatch.setattr(_app_mod, "PROGRESSION", missing)
+    app = BuddyApp(["/bin/cat"])
+    assert app._buddy_name() == ""
+
+
+def test_is_buddy_message_works_end_to_end_with_legacy_shape(monkeypatch, tmp_path) -> None:
+    """The full loop: legacy progression file on disk → _buddy_name() →
+    _is_buddy_message(). If any step loses the name, ~quine routing breaks."""
+    _patch_progression(monkeypatch, tmp_path, {
+        "species_id": "kitsune",
+        "species_name": "Kitsune",
+        "name": "quine",
+    })
+    app = BuddyApp(["/bin/cat"])
+    assert app._is_buddy_message("~quine what color is the sky") is True
+    assert app._is_buddy_message("~Quine hi") is True
+    assert app._is_buddy_message("hello world") is False
+
+
 # ─── live pilot: Enter routing ───────────────────────────────────────────────
 
 
@@ -135,6 +207,59 @@ async def test_enter_without_tilde_forwards_cr_to_claude() -> None:
         assert b"\r" in writes, f"Enter should have been forwarded: {writes!r}"
         assert b"\x15" not in writes, f"no Ctrl+U for normal input: {writes!r}"
         assert fired == []
+
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_paste_forwards_as_bracketed_paste_to_pty() -> None:
+    """Paste events must reach the child wrapped in \\x1b[200~..\\x1b[201~
+    — otherwise multi-line pastes get interpreted as multiple Enter presses."""
+    from textual import events
+
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        pty = app.query_one("#pty", PtyTerminal)
+        writes: list[bytes] = []
+        pty.write_bytes = lambda data: writes.append(data)  # type: ignore[assignment]
+
+        app.post_message(events.Paste("hello\nworld"))
+        await pilot.pause(0.05)
+
+        # The pasted bytes arrive wrapped in bracketed-paste markers.
+        joined = b"".join(writes)
+        assert b"\x1b[200~" in joined
+        assert b"\x1b[201~" in joined
+        assert b"hello\nworld" in joined
+
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_paste_updates_typed_line_for_tilde_detection() -> None:
+    """A paste that starts with `~{name}` followed by Enter should still
+    route to the buddy."""
+    from textual import events
+
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        app._buddy_name = lambda: "quine"  # type: ignore[assignment]
+        pty = app.query_one("#pty", PtyTerminal)
+        writes: list[bytes] = []
+        pty.write_bytes = lambda data: writes.append(data)  # type: ignore[assignment]
+        fired: list[str] = []
+        app._fire_buddy_reply = lambda msg: fired.append(msg)  # type: ignore[assignment]
+
+        app.post_message(events.Paste("~quine hi there"))
+        await pilot.pause(0.05)
+        await pilot.press("enter")
+        await pilot.pause(0.05)
+
+        assert fired == ["hi there"], f"expected buddy to be asked to reply: {fired!r}"
 
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)
