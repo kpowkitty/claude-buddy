@@ -88,30 +88,42 @@ def test_render_line_out_of_range_returns_blank() -> None:
 # ─── paragraph-aware reflow across pyte rows ──────────────────────────────
 
 
-def test_tokens_from_multiple_pyte_rows_pack_together() -> None:
-    """Claude wrote `hello\\n this is an example,\\n pretend\\n that`
-    across four pyte rows. Our reflow should re-pack into narrow
-    lines that carry multiple short words per line."""
+def test_claude_wrapped_rows_merge_across_boundary() -> None:
+    """Row 0 fills the pyte width (Claude wrapped it) → row 1 is a
+    continuation. Our reflow merges their tokens because the break
+    is a layout artifact, not semantic."""
     cols = 40
     narrow = cols - PET_W  # 16
     widget = _HeadlessPty(widget_width=cols, widget_height=200)
     screen = _make_screen(widget, cols=cols, rows=PET_H + 5)
-    _write_row(screen, 0, "hello this is an")
-    _write_row(screen, 1, "example,")
-    _write_row(screen, 2, "pretend")
-    _write_row(screen, 3, "that it is correct")
+    # Row 0 fills 40 cols exactly (Claude-wrap signal: ends at edge).
+    _write_row(screen, 0, "the quick brown fox jumps over the lazyx")
+    _write_row(screen, 1, "  dog and runs away")
     vrows = widget._virtual_rows()
-    # The four pyte rows form one paragraph. Reflowed at narrow=16:
-    pet = [v for v in vrows[:10] if v]  # non-blank pet-zone rows
-    # Each line should be ≤ 16 chars, and tokens should not dangle:
-    # e.g. "example," and "pretend" should be on the same line since
-    # they'd fit together.
+    pet = [v for v in vrows[:PET_H] if v]
     texts = [_vrow_text(widget, v) for v in pet]
     joined = " ".join(t.strip() for t in texts)
-    assert "hello this is an" in joined or "hello this is" in joined
-    assert "example, pretend" in joined
+    # Tokens from row 1 should appear in joined output (merged in).
+    assert "dog" in joined
     for t in texts:
         assert len(t) <= narrow
+
+
+def test_standalone_rows_do_not_merge() -> None:
+    """Rows that end well before the right edge (diff entries, short
+    code lines) are standalone — never merged with the next row."""
+    cols = 80
+    widget = _HeadlessPty(widget_width=cols, widget_height=200)
+    screen = _make_screen(widget, cols=cols, rows=PET_H + 5)
+    # Each row ends well before col 80 — no Claude-wrap signal.
+    _write_row(screen, 0, "325 - rxn_init = torch.tensor(X @ Pin)")
+    _write_row(screen, 1, "326 - y_true = torch.tensor(Y)")
+    vrows = widget._virtual_rows()
+    for v in vrows:
+        pytes = {py for (py, _, _) in v if py >= 0}
+        assert not (0 in pytes and 1 in pytes), (
+            f"standalone rows merged: {v}"
+        )
 
 
 def test_blank_pyte_row_emits_blank_virtual_row() -> None:
