@@ -78,6 +78,16 @@ def _apply_tail_b(frame_b, species):
     return [tail_b.get(i, line) for i, line in enumerate(frame_b)]
 
 
+def blink_frame(species_id: str):
+    """Eyes-closed variant of the base art. Used by callers that animate
+    the tail and blink on independent cycles — they grab the wag from
+    frames_for() and drop in this blink frame on the occasional tick."""
+    _, species = find_species(species_id)
+    if species is None:
+        return ["?"]
+    return _sub_eyes(list(species["art"]), "-")
+
+
 def frames_for(species_id: str, mood: str):
     """Return a list of 2 frames (each a list of strings) for given species and mood."""
     _, species = find_species(species_id)
@@ -122,16 +132,23 @@ def frames_for(species_id: str, mood: str):
         f_a = list(base)
         f_b = _sub_eyes(base, "-")
 
-    # Overlay the wag onto frame B so every mood animates the tail. Moods
+    # Overlay the wag onto frame B so awake moods animate the tail. Moods
     # that use _add_overlay prepend an extra line, shifting row indices —
     # but tail_b is keyed against the base art, so we apply BEFORE the
     # overlay. Re-derive frame B for those moods so the shift doesn't
-    # corrupt tail_b's indices.
+    # corrupt tail_b's indices. Sleeping skips the wag entirely — the pet
+    # is resting, the tail is still.
     if species.get("tail_b"):
-        if mood == "celebrating":
+        if mood == "idle":
+            # Idle frame B is normally a blink (eyes closed). For tail
+            # species we want the wag to alternate INDEPENDENTLY of the
+            # blink — so frame B keeps eyes open and just shifts the
+            # tail. The habitat picks the rare blink separately.
+            f_b = _apply_tail_b(list(base), species)
+        elif mood == "celebrating":
             f_b = _add_overlay(_apply_tail_b(_sub_eyes(base, "*"), species), " * . ")
         elif mood == "sleeping":
-            f_b = _add_overlay(_apply_tail_b(_sub_eyes(base, "-"), species), " zZ ")
+            pass  # No tail wag while asleep; frame B keeps the base tail.
         elif mood == "petted":
             # Keep the "still / content" read — both frames identical, just
             # with the tail wagging underneath.

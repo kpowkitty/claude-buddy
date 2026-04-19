@@ -54,8 +54,13 @@ SPECIES = {
                 r"   .'   o   '.   ",
                 r"  (    \_/    )  ",
                 r"   '._     _.'   ",
-                r"   /~~~~~~~~~\   ",
+                r"   /~ ~ ~ ~ ~\   ",
             ],
+            # Alternate the underside tildes so the slime jiggles. Same inner
+            # 9-col span as frame A, just shifted by one cell.
+            "tail_b": {
+                4: r"   / ~ ~ ~ ~ \   ",
+            },
         },
         {
             "id": "pebble",

@@ -58,28 +58,25 @@ def test_kitsune_tail_b_actually_changes_expected_rows() -> None:
     )
 
 
-# ─── species without tail_b are unchanged ────────────────────────────────────
+# ─── slime jiggle ────────────────────────────────────────────────────────────
 
 
-def test_slime_has_no_tail_b() -> None:
+def test_slime_has_tail_b() -> None:
     _, species = find_species("slime")
     assert species is not None
-    assert "tail_b" not in species
+    assert "tail_b" in species
+    # Row 4 of the base art holds the underside tildes; tail_b shifts them.
+    assert 4 in species["tail_b"]
 
 
-def test_slime_frames_only_differ_by_blink() -> None:
-    """Species without tail_b should animate exactly as before — idle's
-    frame B is just the eye-blink variant, nothing more."""
+def test_slime_frame_b_underside_is_shifted() -> None:
+    """Slime's idle animation should alternate the underside tilde pattern:
+    frame A has `/~ ~ ~ ~ ~\\`, frame B has `/ ~ ~ ~ ~ \\`."""
     a, b = frames_for("slime", "idle")
-    # Both frames are the same height and width.
-    assert len(a) == len(b)
-    # Difference must be limited to eye characters (o/O → -), not tail glyphs.
-    for row_a, row_b in zip(a, b):
-        diffs = [(i, ca, cb) for i, (ca, cb) in enumerate(zip(row_a, row_b)) if ca != cb]
-        for _, ca, cb in diffs:
-            assert ca in "oO" and cb == "-", (
-                f"slime frame differs by non-blink glyph: {ca!r} → {cb!r}"
-            )
+    # Row 4 is the underside.
+    assert "~" in a[4]
+    assert "~" in b[4]
+    assert a[4] != b[4], "slime frame B row 4 should differ from frame A"
 
 
 def test_unknown_species_returns_fallback() -> None:

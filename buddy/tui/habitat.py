@@ -28,7 +28,7 @@ sys.path.insert(0, _BUDDY)
 
 from state_adapter import BuddyView, read_view  # noqa: E402
 from species import find_species, SKILLS  # noqa: E402
-from sprites import frames_for  # noqa: E402
+from sprites import blink_frame, frames_for  # noqa: E402
 
 
 HABITAT_WIDTH = 24
@@ -90,19 +90,30 @@ class SpritePanel(Widget):
             return blank
         frames = frames_for(v.species_id, v.mood)
         # Animation cadence matches buddy/buddy.py: idle blink every 25s,
-        # sleeping slow, others ~0.5s.
+        # sleeping = still (frame B === frame A for tail species),
+        # awake-with-tail = steady wag.
+        sprite = None
         if v.mood == "idle":
-            cycle = self._tick % 250
-            idx = 1 if cycle < 2 else 0
+            if species.get("tail_b"):
+                # Tail species: wag every 10 ticks (~1s), AND briefly blink
+                # every 100 ticks (~10s). Two independent cycles layered.
+                # The blink overrides the wag for its 2-tick window.
+                cycle = self._tick % 100
+                if cycle < 2:
+                    sprite = blink_frame(v.species_id)
+                else:
+                    idx = (self._tick // 10) % 2
+            else:
+                cycle = self._tick % 250
+                idx = 1 if cycle < 2 else 0
         elif v.mood == "sleeping":
             idx = (self._tick // 10) % 2
         else:
             # More active = faster blinks. activity_rate is 0..1.
-            # Period doubled vs. original so the tail wag reads as a
-            # gentle swish rather than a frantic blur.
             period = max(4, int(20 - v.activity_rate * 14))
             idx = (self._tick // period) % 2
-        sprite = frames[idx]
+        if sprite is None:
+            sprite = frames[idx]
         if y >= len(sprite):
             return blank
         line = sprite[y]
@@ -257,9 +268,19 @@ class Bubble(Widget):
         if v is None or not v.speech:
             return blank
         lines = self._compose_lines(v.speech, w)
-        if y >= len(lines):
+        if not lines:
             return blank
-        return Strip([Segment(lines[y].ljust(w), Style(color="cyan"))])
+        # Bottom-anchor: the tail arrow should sit on the LAST row of the
+        # reservation so short chirps appear right above the sprite, not
+        # floating at the top of an empty block.
+        h = self.size.height
+        top_pad = max(0, h - len(lines))
+        if y < top_pad:
+            return blank
+        idx = y - top_pad
+        if idx >= len(lines):
+            return blank
+        return Strip([Segment(lines[idx].ljust(w), Style(color="cyan"))])
 
     def get_content_height(self, container, viewport, width: int) -> int:
         v = self.view

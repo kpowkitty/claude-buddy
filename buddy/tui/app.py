@@ -31,7 +31,7 @@ from input_map import key_to_bytes  # noqa: E402
 from personality import for_species  # noqa: E402
 from pty_terminal import PtyTerminal  # noqa: E402
 import speak  # noqa: E402
-from state import BUDDY_DIR, IS_TEST_MODE, PROGRESSION, STATE, read_json, write_atomic  # noqa: E402
+from state import BUDDY_DIR, IS_TEST_MODE, PROGRESSION, STATE, read_json, update_state, write_atomic  # noqa: E402
 
 
 def _read_active_prog() -> dict | None:
@@ -234,10 +234,16 @@ class BuddyApp(App):
                 # that instead of Enter — Claude never processes the msg.
                 pty.write_bytes(b"\x15")
                 if message:
+                    # Any direct message from the user counts as interaction —
+                    # wake the buddy so it can respond, then fire the reply.
+                    self._wake_buddy()
                     self._fire_buddy_reply(message)
                 event.stop()
                 return
-            # Not a buddy message — forward Enter to Claude as usual.
+            # Not a buddy message — forward Enter to Claude as usual. A
+            # prompt to Claude also counts as activity; bump last_event_ts
+            # so a sleeping buddy wakes up.
+            self._wake_buddy()
             pty.write_bytes(b"\r")
             event.stop()
             return
@@ -310,6 +316,21 @@ class BuddyApp(App):
             return False
         rest = line[1:]
         return rest[: len(name)].lower() == name.lower()
+
+    def _wake_buddy(self) -> None:
+        """Stamp last_event_ts so derive_mood flips out of 'sleeping'.
+
+        Called when the user prompts Claude or talks to the buddy directly.
+        Keeps the buddy feeling responsive — if you've been afk for ages
+        and then actually interact, the buddy wakes up instead of snoring
+        through the conversation.
+        """
+        try:
+            update_state(last_event="user_input")
+        except Exception:
+            # State updates are best-effort; a failure here shouldn't
+            # block the keystroke from reaching Claude.
+            pass
 
     def _fire_buddy_reply(self, message: str) -> None:
         """Fire-and-forget: ask Claude (as the buddy) to reply. Writes the
