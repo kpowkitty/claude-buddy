@@ -25,7 +25,7 @@ A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claud
 ## What it does
 
 - **Gacha hatch**: `/buddy hatch --tokens` rolls a rarity (common 60% / uncommon 25% / rare 10% / epic 4% / legendary 1%) and a species within that tier. 11 species total.
-- **Collection economy**: every 20 pet-levels earns a hatch token (your global level). Rolling a species you already own on `--tokens` burns the token but grants a duplicate shard; 5 shards can be spent via `--shards` for a guaranteed new species.
+- **Collection economy**: hatch tokens unlock on an escalating schedule based on your global level (sum of every buddy's pet level). Token 1 at 5 levels, token 2 at 15, token 3 at 30, token 4 at 50 — each token costs 5 more pet-levels than the last. Rolling a species you already own on `--tokens` burns the token but grants a duplicate shard; 5 shards can be spent via `--shards` for a guaranteed new species.
 - **Skills**: every buddy rolls 8 skill stats (wisdom, debugging, refactoring, etc.). Each species has a baseline range and a signature skill that rolls much higher.
 - **Embedded TUI**: `claude-buddy` launches Claude Code inside a Textual app, with your buddy animated as a floating overlay in the top-right reacting to what you're doing.
 - **L-shape reflow**: Claude's text wraps around the pet's reserved rectangle so nothing lands under the overlay. Once Claude's conversation fills past the pet zone, it gets the full terminal width back.
