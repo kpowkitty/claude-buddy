@@ -189,7 +189,7 @@ class _Header(Static):
 
         parts = [
             f"[b]{n_buddies}[/] buddy(s)",
-            f"global lvl [b]{gl:.1f}[/]",
+            f"global lvl [b]{gl}[/]",
             f"tokens [b]{tokens}[/]",
             f"shards [b]{sh}[/]",
         ]
