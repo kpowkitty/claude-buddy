@@ -421,78 +421,321 @@ class PtyTerminal(Widget, can_focus=True):
         if cols != self._screen.columns or rows != self._screen.lines:
             self.resize_to(cols, rows)
 
-    # Claude Code's prompt box top/bottom uses U+2500 (─). When the width
-    # flips narrow→wide mid-render, there's a moment where Claude has
-    # already emitted a wrapped border at the narrow width — row y is a
-    # solid ─ run of length (cols - PET_W), row y+1 starts with more ─
-    # (the overflow continuation). Blank the continuation so we don't
-    # show a doubled border during the straddle. Cosmetic only; pyte's
-    # buffer stays intact.
-    _PROMPT_BORDER_CH = "─"
+    # Box-drawing chars Claude uses for UI chrome (prompt-box borders,
+    # dividers). A pet-zone row containing any of these is treated as
+    # non-wrappable chrome: emit the narrow slice as-is, no reflow.
+    _BORDER_CHARS = frozenset("─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┤┬┴┼═║╭╮╯╰╴╵╶╷")
 
-    def _row_is_full_narrow_border(self, y: int) -> bool:
-        """True if row y is filled edge-to-edge with the prompt-border
-        char across the narrow width (cols - PET_W)."""
-        if self._screen is None:
-            return False
-        if not (0 <= y < self._screen.lines):
-            return False
-        narrow = max(0, self._screen.columns - PET_W)
-        if narrow <= 0:
-            return False
+    # A virtual row is a list of (pyte_y, x_start, x_end) spans. Each
+    # span's cells are rendered with their original styles (read from
+    # pyte's buffer at pyte_y, x). An empty span list means a blank
+    # virtual row. Multi-span rows happen when reflow packs tokens
+    # from several pyte rows onto one visual line.
+    # VirtualRow = list[tuple[int, int, int]]
+
+    def _row_is_blank(self, y: int, cols: int) -> bool:
         row = self._screen.buffer[y]
-        for x in range(narrow):
-            if (row[x].data or " ") != self._PROMPT_BORDER_CH:
+        for x in range(cols):
+            if (row[x].data or " ") != " ":
                 return False
         return True
 
-    def _leading_border_run(self, y: int) -> int:
-        """How many leading cells of row y hold the prompt-border char."""
-        if self._screen is None or not (0 <= y < self._screen.lines):
-            return 0
+    def _row_has_border(self, y: int, cols: int) -> bool:
+        row = self._screen.buffer[y]
+        for x in range(cols):
+            if (row[x].data or " ") in self._BORDER_CHARS:
+                return True
+        return False
+
+    def _row_last_nonblank(self, y: int, cols: int) -> int:
+        row = self._screen.buffer[y]
+        last = cols
+        while last > 0 and (row[last - 1].data or " ") == " ":
+            last -= 1
+        return last
+
+    def _row_leading_indent(self, y: int, cols: int) -> int:
+        """Count leading spaces on row y (up to cols)."""
         row = self._screen.buffer[y]
         n = 0
-        for x in range(self._screen.columns):
-            if (row[x].data or " ") != self._PROMPT_BORDER_CH:
-                break
+        while n < cols and (row[n].data or " ") == " ":
             n += 1
         return n
 
+    def _tokenize_row(self, y: int, x_start: int, x_end: int) -> list[tuple[int, int]]:
+        """Break row y's cells [x_start..x_end) into tokens.
+
+        Alternating non-space and space runs. Non-space runs keep any
+        glued-on punctuation (`word,` stays one token), so ride-along
+        punctuation wraps with its word.
+        """
+        row = self._screen.buffer[y]
+        tokens: list[tuple[int, int]] = []
+        x = x_start
+        while x < x_end:
+            start = x
+            if (row[x].data or " ") == " ":
+                while x < x_end and (row[x].data or " ") == " ":
+                    x += 1
+            else:
+                while x < x_end and (row[x].data or " ") != " ":
+                    x += 1
+            tokens.append((start, x))
+        return tokens
+
+    # Sentinel span used to insert a synthetic single space between
+    # tokens from adjacent pyte rows that didn't end/start with one.
+    # render_line emits a literal " " (default style) for spans with
+    # pyte_y == -1.
+    _SYNTHETIC_SPACE: tuple[int, int, int] = (-1, 0, 1)
+
+    def _reflow_paragraph(
+        self,
+        pyte_ys: list[int],
+        cols: int,
+        narrow: int,
+    ) -> list[list[tuple[int, int, int]]]:
+        """Reflow a run of consecutive non-blank content pyte rows into
+        narrow-width virtual rows.
+
+        Concatenates all tokens from the given pyte rows into one
+        stream (ignoring pyte's line breaks — we're re-wrapping
+        anyway), then token-packs into lines of at most `narrow`
+        cells. Preserves the first row's leading indent as the
+        paragraph indent applied to every continuation line.
+
+        Each returned virtual row is a list of (pyte_y, x_start, x_end)
+        spans. A single visual line may span multiple pyte rows when
+        reflow packs tokens across Claude's row boundaries.
+        """
+        indent = self._row_leading_indent(pyte_ys[0], cols)
+        # Gather all word+space tokens from every row in document order,
+        # skipping leading indent on each row (we'll re-emit the
+        # paragraph indent on continuation lines). Insert a synthetic
+        # space between rows whose own tokens don't already end/start
+        # with one — otherwise "word\nnext" would concatenate as
+        # "wordnext" when packed onto the same line.
+        all_tokens: list[tuple[int, int, int]] = []
+        for i, y in enumerate(pyte_ys):
+            last = self._row_last_nonblank(y, cols)
+            start = indent if i == 0 else self._row_leading_indent(y, cols)
+            row_tokens = self._tokenize_row(y, start, last)
+            if i > 0 and row_tokens and all_tokens:
+                prev = all_tokens[-1]
+                prev_ends_space = (
+                    prev != self._SYNTHETIC_SPACE
+                    and (self._screen.buffer[prev[0]][prev[2] - 1].data or " ") == " "
+                )
+                first_ts = row_tokens[0][0]
+                first_is_space = (self._screen.buffer[y][first_ts].data or " ") == " "
+                if not prev_ends_space and not first_is_space:
+                    all_tokens.append(self._SYNTHETIC_SPACE)
+            for (ts, te) in row_tokens:
+                all_tokens.append((y, ts, te))
+
+        indent_span = None
+        if indent > 0:
+            # Indent comes from the first pyte row's first `indent` cells.
+            indent_span = (pyte_ys[0], 0, indent)
+
+        vrows: list[list[tuple[int, int, int]]] = []
+        current: list[tuple[int, int, int]] = []
+        current_w = 0
+
+        def _start_line() -> None:
+            nonlocal current, current_w
+            current = []
+            current_w = 0
+            if indent_span is not None:
+                current.append(indent_span)
+                current_w = indent
+
+        def _flush() -> None:
+            nonlocal current, current_w
+            if current:
+                vrows.append(current)
+            current = []
+            current_w = 0
+
+        _start_line()
+        for (py, ts, te) in all_tokens:
+            tlen = te - ts
+            if py == -1:
+                is_space = True
+            else:
+                is_space = (self._screen.buffer[py][ts].data or " ") == " "
+            if is_space:
+                # Space token: extend the current line if it fits;
+                # otherwise break and drop the space (don't carry it
+                # to the new line — new lines get the paragraph indent).
+                if current_w + tlen <= narrow:
+                    current.append((py, ts, te))
+                    current_w += tlen
+                else:
+                    _flush()
+                    _start_line()
+                continue
+            # Word token.
+            # Oversized = longer than the available room on a fresh
+            # indented line. That word will never fit on any line
+            # cleanly, so fall back to char-splitting it.
+            if tlen > narrow - indent:
+                if current_w > indent:
+                    _flush()
+                    _start_line()
+                cur = ts
+                while cur < te:
+                    room = narrow - current_w
+                    nxt = min(cur + room, te)
+                    current.append((py, cur, nxt))
+                    current_w += nxt - cur
+                    cur = nxt
+                    if cur < te:
+                        _flush()
+                        _start_line()
+                continue
+            # Fits on the current line?
+            if current_w + tlen <= narrow:
+                current.append((py, ts, te))
+                current_w += tlen
+            else:
+                # Wrap onto a fresh (indented) line.
+                _flush()
+                _start_line()
+                current.append((py, ts, te))
+                current_w += tlen
+        _flush()
+        return vrows
+
+    def _pet_zone_virtual_rows(self, cols: int, narrow: int) -> list[list[tuple[int, int, int]]]:
+        """Build virtual rows for pyte rows 0..PET_H-1.
+
+        Walks the zone, grouping consecutive non-blank non-chrome rows
+        into paragraphs that get reflowed together. Blank pyte rows
+        emit an empty virtual row (Claude's paragraph break). Chrome
+        rows (border chars) emit a single-span narrow slice, no reflow.
+        """
+        out: list[list[tuple[int, int, int]]] = []
+        paragraph: list[int] = []
+
+        def _flush_paragraph() -> None:
+            if paragraph:
+                out.extend(self._reflow_paragraph(paragraph, cols, narrow))
+                paragraph.clear()
+
+        for y in range(PET_H):
+            if y >= self._screen.lines:
+                break
+            if self._row_is_blank(y, cols):
+                _flush_paragraph()
+                out.append([])  # blank virtual row — Claude's break.
+                continue
+            if self._row_has_border(y, cols):
+                _flush_paragraph()
+                last = self._row_last_nonblank(y, cols)
+                end = min(last, narrow) if last > 0 else narrow
+                out.append([(y, 0, end)])
+                continue
+            paragraph.append(y)
+        _flush_paragraph()
+        return out
+
+    def _virtual_rows(self) -> list[list[tuple[int, int, int]]]:
+        """Build the full virtual-row list for the widget.
+
+        Pet-zone rows (0..PET_H-1) get paragraph-aware reflow — tokens
+        from consecutive content rows are packed into fresh narrow
+        lines, blanks preserved as paragraph breaks, chrome rows
+        char-split. Rows below PET_H emit a single full-width span
+        each (no reflow).
+        """
+        if self._screen is None:
+            return []
+        cols = self._screen.columns
+        narrow = max(0, cols - PET_W)
+        if narrow == 0 or narrow >= cols:
+            # Degenerate widths: no pet column, just pass through.
+            return [[(y, 0, cols)] for y in range(self._screen.lines)]
+
+        out = self._pet_zone_virtual_rows(cols, narrow)
+        for y in range(PET_H, self._screen.lines):
+            out.append([(y, 0, cols)])
+        return out
+
     def render_line(self, y: int) -> Strip:
         widget_w = self.size.width
-        if self._screen is None or not (0 <= y < self._screen.lines):
+        widget_h = self.size.height
+        if self._screen is None:
             return Strip([Segment(" " * widget_w, _DEFAULT_STYLE)])
 
-        # Straddle fix: if the previous row (still in the narrow zone) is
-        # a full-narrow-width prompt border, any leading border run on
-        # this row is the wrapped overflow — blank it.
-        blank_prefix = 0
-        if 0 < y <= PET_H and y - 1 < PET_H:
-            if self._row_is_full_narrow_border(y - 1):
-                blank_prefix = self._leading_border_run(y)
+        # Anchor the virtual-row list to the bottom of the widget so
+        # Claude's prompt (which lives at the bottom of pyte's buffer)
+        # stays pinned to the widget's bottom no matter how the pet
+        # zone reflows. Rows above the visible window are scrolled off
+        # the top — they sit behind the habitat overlay anyway.
+        vrows = self._virtual_rows()
+        offset = len(vrows) - widget_h
+        vy = y + offset
+        if not (0 <= vy < len(vrows)):
+            return Strip([Segment(" " * widget_w, _DEFAULT_STYLE)])
 
-        row = self._screen.buffer[y]
-        cols = self._screen.columns
+        spans = vrows[vy]
+        # A span list is the multi-source content of this virtual row.
+        # An empty list is a blank row (Claude's paragraph break).
+        # For each span, we read cells at (pyte_y, x) and carry their
+        # original style. is_pet_zone rows pad to widget_w so any
+        # residual dark bg (from Claude's prompt box) doesn't paint.
+        is_pet_zone = all(py < PET_H for (py, _, _) in spans) if spans else True
+
+        # Trim trailing blanks on the last span only (so mid-line
+        # space tokens stay intact). Pet-zone rows are padded to
+        # widget_w with default-style spaces so residual dark bg
+        # from Claude's prompt box doesn't bleed through past the
+        # content.
+        spans = list(spans)
+        if is_pet_zone and spans and spans[-1][0] != -1:
+            py, xs, xe = spans[-1]
+            row = self._screen.buffer[py]
+            while xe > xs and (row[xe - 1].data or " ") == " ":
+                xe -= 1
+            if xe == xs:
+                spans.pop()
+            else:
+                spans[-1] = (py, xs, xe)
+
         segments: list[Segment] = []
         cur_text = ""
         cur_style = _DEFAULT_STYLE
-        for x in range(cols):
-            if x < blank_prefix:
-                data = " "
-                style = _DEFAULT_STYLE
-            else:
+        rendered_w = 0
+        for (py, xs, xe) in spans:
+            if py == -1:
+                data = " " * (xe - xs)
+                if cur_style == _DEFAULT_STYLE:
+                    cur_text += data
+                else:
+                    if cur_text:
+                        segments.append(Segment(cur_text, cur_style))
+                    cur_text = data
+                    cur_style = _DEFAULT_STYLE
+                rendered_w += xe - xs
+                continue
+            row = self._screen.buffer[py]
+            for x in range(xs, xe):
                 ch = row[x]
                 data = ch.data or " "
                 style = _cell_style(ch)
-            if style == cur_style:
-                cur_text += data
-            else:
-                if cur_text:
-                    segments.append(Segment(cur_text, cur_style))
-                cur_text = data
-                cur_style = style
+                if style == cur_style:
+                    cur_text += data
+                else:
+                    if cur_text:
+                        segments.append(Segment(cur_text, cur_style))
+                    cur_text = data
+                    cur_style = style
+                rendered_w += 1
         if cur_text:
             segments.append(Segment(cur_text, cur_style))
+        if is_pet_zone and widget_w > rendered_w:
+            segments.append(Segment(" " * (widget_w - rendered_w), _DEFAULT_STYLE))
         return Strip(segments)
 
     # ── scrollback ──────────────────────────────────────────────────────────
