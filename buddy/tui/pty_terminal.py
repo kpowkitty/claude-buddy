@@ -98,6 +98,23 @@ def _cell_style(char) -> Style:
 _POLL_HZ = 30
 _READ_CHUNK = 4096
 
+# Pet overlay geometry. The habitat widget renders the sprite + name + XP +
+# time + a 7-row bubble reservation in the top-right, totalling 17 rows by
+# 24 cols. The L-reflow screen and the adaptive-COLUMNS logic both read
+# these. Keep in sync with habitat.HABITAT_WIDTH and the bubble height.
+PET_W = 24
+PET_H = 17
+
+def _effective_child_cols(cols: int, went_wide: bool) -> int:
+    """How wide should we tell the child (Claude) the terminal is?
+
+    Start narrow (`cols - PET_W`) so Claude's UI fits alongside the
+    floating pet. Once Claude's content has extended below the pet zone
+    (LReflowHistoryScreen.content_went_wide), switch to full width — our
+    L-reflow wraps any rows that still land in the narrow zone.
+    """
+    return cols if went_wide else max(20, cols - PET_W)
+
 
 class PtyTerminal(Widget, can_focus=True):
     """Runs `command` in a pseudo-terminal and renders its output.
@@ -127,6 +144,11 @@ class PtyTerminal(Widget, can_focus=True):
         # don't clobber the scrolled-back view.
         self._paused: bool = False
         self._paused_buffer: bytearray = bytearray()
+        # Cached "Claude has gone wide" bit from the last poll of
+        # LReflowHistoryScreen.content_went_wide. When this flips vs.
+        # the screen's live value, we update Claude's COLUMNS and send
+        # Ctrl+L so it repaints at the new width.
+        self._last_went_wide: bool = False
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -159,7 +181,22 @@ class PtyTerminal(Widget, can_focus=True):
         # history rather than being silently dropped.
         # `ratio` controls how many lines one prev_page/next_page moves —
         # 0.15 gives a gentler wheel tick than pyte's default half-screen.
-        self._screen = pyte.HistoryScreen(cols, rows, history=2000, ratio=0.15)
+        # L-reflow reserves the top-right rectangle so Claude's text
+        # wraps around the floating habitat pane. Set BUDDY_LREFLOW=0
+        # to fall back to a plain HistoryScreen for debugging — the
+        # habitat overlay will then cover live text.
+        if os.environ.get("BUDDY_LREFLOW") == "0":
+            self._screen = pyte.HistoryScreen(cols, rows, history=2000, ratio=0.15)
+        else:
+            from lreflow import LReflowHistoryScreen
+            # Reserved rectangle: bubble(7) + sprite(6) + name(1) + xp(2)
+            # + time(1) = 17 rows, 24 cols (HABITAT_WIDTH). Claude's text
+            # wraps at cols-24 in rows 0..16, and at cols from row 17 down.
+            # If skills panel is toggled, Claude's text there is occluded
+            # under the panel until the user toggles it off — acceptable.
+            self._screen = LReflowHistoryScreen(
+                cols, rows, pet_w=PET_W, pet_h=PET_H, history=2000, ratio=0.15,
+            )
         # Wire query responses (e.g. cursor-position via \x1b[6n) back to the
         # child. Without this, Claude's UI assumes the terminal is unresponsive
         # and falls back to single-line layouts (the AskUserQuestion "Other"
@@ -167,11 +204,17 @@ class PtyTerminal(Widget, can_focus=True):
         self._screen.write_process_input = self._write_to_child
         self._stream = pyte.ByteStream(self._screen)
 
+        # Claude is told a cols that starts narrow (so its UI fits
+        # beside the floating pet) and flips to full width once Claude
+        # draws content below the pet zone. On spawn, no content yet,
+        # so narrow. The flip is detected in _drain_pty.
+        self._last_went_wide = False
+        child_cols = _effective_child_cols(cols, went_wide=False)
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["LINES"] = str(rows)
-        env["COLUMNS"] = str(cols)
+        env["COLUMNS"] = str(child_cols)
 
         try:
             pid, fd = pty.fork()
@@ -188,7 +231,7 @@ class PtyTerminal(Widget, can_focus=True):
                     if sig is not None:
                         signal.signal(sig, signal.SIG_DFL)
                 signal.set_wakeup_fd(-1)
-                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                winsize = struct.pack("HHHH", rows, child_cols, 0, 0)
                 fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
                 os.execvpe(self._command[0], self._command, env)
             except Exception:
@@ -248,7 +291,15 @@ class PtyTerminal(Widget, can_focus=True):
             _log.warning("query response write failed: %r", e)
 
     def resize_to(self, cols: int, rows: int) -> None:
-        """Update both pyte's screen and the pty's view of its size."""
+        """Update both pyte's screen and the pty's view of its size.
+
+        Also does an automatic F5-equivalent refresh: wipes pyte's buffer
+        and asks Claude to repaint. Without this, a resize that grows the
+        widget past PET_H causes `content_went_wide` to flip mid-draw on
+        the first subsequent prompt render, producing a visible double-
+        line glitch. Refreshing here makes the resize settle before any
+        new content arrives.
+        """
         if cols <= 0 or rows <= 0:
             return
         try:
@@ -264,14 +315,61 @@ class PtyTerminal(Widget, can_focus=True):
         # escape sequence across the size change.
         self._drain_pty()
         if self._screen is not None:
+            self._screen.reset()
             self._screen.resize(rows, cols)
+        # reset() clears content_went_wide; preserve whatever width mode
+        # we were in before the resize. Fresh terminals (never went wide)
+        # stay narrow so Claude's startup card adapts to the small width.
+        # Sessions that had gone wide stay wide so a resize doesn't
+        # regress Claude to a cramped layout.
+        went_wide = self._last_went_wide
         if self._fd is not None:
+            child_cols = _effective_child_cols(cols, went_wide=went_wide)
             try:
-                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                winsize = struct.pack("HHHH", rows, child_cols, 0, 0)
                 fcntl.ioctl(self._fd, termios.TIOCSWINSZ, winsize)
             except OSError as e:
                 _log.warning("TIOCSWINSZ failed: %r", e)
+            # Ctrl+L — tell Claude to redraw from scratch at the new size.
+            try:
+                os.write(self._fd, b"\x0c")
+            except OSError:
+                pass
         self.refresh()
+
+    def _maybe_flip_width(self) -> None:
+        """Check the screen's content_went_wide bit; if it doesn't match
+        our last cached value, update Claude's COLUMNS and trigger a
+        repaint. Called from _drain_pty after every read."""
+        if self._fd is None or self._screen is None:
+            return
+        current = getattr(self._screen, "content_went_wide", False)
+        if current == self._last_went_wide:
+            return
+        # Transition. Recompute cols, update Claude, clear pyte, Ctrl+L.
+        cols = max(20, self.size.width)
+        rows = max(5, self.size.height)
+        child_cols = _effective_child_cols(cols, went_wide=current)
+        try:
+            winsize = struct.pack("HHHH", rows, child_cols, 0, 0)
+            fcntl.ioctl(self._fd, termios.TIOCSWINSZ, winsize)
+        except OSError as e:
+            _log.warning("TIOCSWINSZ on width flip failed: %r", e)
+        # Clear just the visible screen so stale pixels from the old
+        # width don't linger, but keep tab stops / modes / scrollback
+        # intact. reset() does a full reinit which causes a visible
+        # blank-frame blink. clear_visible() is a bypass that also
+        # preserves our content_went_wide flag (so the transition we
+        # just detected isn't immediately undone).
+        if hasattr(self._screen, "clear_visible"):
+            self._screen.clear_visible()
+        else:
+            self._screen.erase_in_display(2)
+        try:
+            os.write(self._fd, b"\x0c")
+        except OSError:
+            pass
+        self._last_went_wide = current
 
     # ── pty I/O ─────────────────────────────────────────────────────────────
 
@@ -304,6 +402,8 @@ class PtyTerminal(Widget, can_focus=True):
                 self._paused_buffer.extend(data)
             else:
                 self._stream.feed(data)
+        # After feeding, the screen may have flipped narrow↔wide.
+        self._maybe_flip_width()
         self.refresh()
 
     # ── rendering ───────────────────────────────────────────────────────────
@@ -320,10 +420,55 @@ class PtyTerminal(Widget, can_focus=True):
         if cols != self._screen.columns or rows != self._screen.lines:
             self.resize_to(cols, rows)
 
+    # Claude Code's prompt box top/bottom uses U+2500 (─). When the width
+    # flips narrow→wide mid-render, there's a moment where Claude has
+    # already emitted a wrapped border at the narrow width — row y is a
+    # solid ─ run of length (cols - PET_W), row y+1 starts with more ─
+    # (the overflow continuation). Blank the continuation so we don't
+    # show a doubled border during the straddle. Cosmetic only; pyte's
+    # buffer stays intact.
+    _PROMPT_BORDER_CH = "─"
+
+    def _row_is_full_narrow_border(self, y: int) -> bool:
+        """True if row y is filled edge-to-edge with the prompt-border
+        char across the narrow width (cols - PET_W)."""
+        if self._screen is None:
+            return False
+        if not (0 <= y < self._screen.lines):
+            return False
+        narrow = max(0, self._screen.columns - PET_W)
+        if narrow <= 0:
+            return False
+        row = self._screen.buffer[y]
+        for x in range(narrow):
+            if (row[x].data or " ") != self._PROMPT_BORDER_CH:
+                return False
+        return True
+
+    def _leading_border_run(self, y: int) -> int:
+        """How many leading cells of row y hold the prompt-border char."""
+        if self._screen is None or not (0 <= y < self._screen.lines):
+            return 0
+        row = self._screen.buffer[y]
+        n = 0
+        for x in range(self._screen.columns):
+            if (row[x].data or " ") != self._PROMPT_BORDER_CH:
+                break
+            n += 1
+        return n
+
     def render_line(self, y: int) -> Strip:
         widget_w = self.size.width
         if self._screen is None or not (0 <= y < self._screen.lines):
             return Strip([Segment(" " * widget_w, _DEFAULT_STYLE)])
+
+        # Straddle fix: if the previous row (still in the narrow zone) is
+        # a full-narrow-width prompt border, any leading border run on
+        # this row is the wrapped overflow — blank it.
+        blank_prefix = 0
+        if 0 < y <= PET_H and y - 1 < PET_H:
+            if self._row_is_full_narrow_border(y - 1):
+                blank_prefix = self._leading_border_run(y)
 
         row = self._screen.buffer[y]
         cols = self._screen.columns
@@ -331,9 +476,13 @@ class PtyTerminal(Widget, can_focus=True):
         cur_text = ""
         cur_style = _DEFAULT_STYLE
         for x in range(cols):
-            ch = row[x]
-            data = ch.data or " "
-            style = _cell_style(ch)
+            if x < blank_prefix:
+                data = " "
+                style = _DEFAULT_STYLE
+            else:
+                ch = row[x]
+                data = ch.data or " "
+                style = _cell_style(ch)
             if style == cur_style:
                 cur_text += data
             else:

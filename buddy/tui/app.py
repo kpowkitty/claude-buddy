@@ -50,15 +50,25 @@ class BuddyApp(App):
 
     CSS = f"""
     Screen {{
-        layout: horizontal;
+        /* Three layers:
+             base    — Claude's pty fills everything.
+             overlay — Habitat (floating pet) sits in the top-right.
+             topmost — TEST MODE banner so it never fights the habitat.
+           The L-reflow in pty_terminal reserves the top-right rectangle
+           so Claude's text never lands under the habitat. */
+        layers: base overlay topmost;
         background: rgba(0, 0, 0, 0);
     }}
     PtyTerminal {{
-        width: 1fr;
+        layer: base;
+        width: 100%;
         height: 100%;
     }}
     Habitat {{
+        layer: overlay;
+        dock: right;
         width: {HABITAT_WIDTH};
+        height: auto;
     }}
     Footer {{
         dock: bottom;
@@ -66,6 +76,7 @@ class BuddyApp(App):
     }}
     #test-mode-banner {{
         dock: top;
+        layer: topmost;
         height: 1;
         background: red;
         color: white;
@@ -86,6 +97,7 @@ class BuddyApp(App):
         Binding("f2", "gacha", "Gacha", show=True),
         Binding("f3", "toggle_skills", "Skills", show=True),
         Binding("f4", "toggle_habitat", "Toggle buddy", show=True),
+        Binding("f5", "refresh_view", "Refresh", show=True),
     ]
 
     def __init__(self, command: Sequence[str], **kwargs) -> None:
@@ -132,6 +144,21 @@ class BuddyApp(App):
     def action_gacha(self) -> None:
         """Open the gacha collection menu (full roster, rarity-grouped)."""
         self.push_screen(GachaMenu())
+
+    def action_refresh_view(self) -> None:
+        """Force a redraw when the view gets corrupted (usually after a
+        resize). Wipes pyte's screen, re-syncs the pty size, and asks
+        Claude to repaint via Ctrl+L."""
+        pty = self.query_one("#pty", PtyTerminal)
+        if pty._screen is not None:
+            pty._screen.reset()
+        # Re-propagate the current widget size so pyte & the child agree.
+        cols = max(20, pty.size.width)
+        rows = max(5, pty.size.height)
+        pty.resize_to(cols, rows)
+        # Ctrl+L tells Claude Code to redraw its UI from scratch.
+        pty.write_bytes(b"\x0c")
+        pty.refresh()
 
     # How long the "petted" mood + prrr speech persists. Bump this if the
     # purr feels too brief, or wire it to a personality trait later.
