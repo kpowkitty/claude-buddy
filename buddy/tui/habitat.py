@@ -237,8 +237,10 @@ class Bubble(Widget):
 
     DEFAULT_CSS = """
     Bubble {
-        height: auto;
-        max-height: 10;
+        /* Always reserve 7 rows of chat space above the sprite: top
+           border, 4 text lines, bottom border, tail arrow. Keeps the pet
+           anchored at a predictable spot; longer chirps just clip. */
+        height: 7;
     }
     """
 
@@ -385,7 +387,9 @@ class Habitat(Vertical):
     """
 
     def compose(self) -> ComposeResult:
-        yield _TransparentSpacer(id="spacer")
+        # No spacer at the top — when the habitat floats at the top-right,
+        # we want everything stacked from the top. A 1fr spacer would
+        # stretch the overlay to full screen height.
         yield Bubble(id="bubble")
         yield SpritePanel(id="sprite")
         yield NamePanel(id="name")
