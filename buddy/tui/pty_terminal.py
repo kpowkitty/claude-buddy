@@ -508,17 +508,24 @@ class PtyTerminal(Widget, can_focus=True):
         spans. A single visual line may span multiple pyte rows when
         reflow packs tokens across Claude's row boundaries.
         """
-        indent = self._row_leading_indent(pyte_ys[0], cols)
-        # Gather all word+space tokens from every row in document order,
-        # skipping leading indent on each row (we'll re-emit the
-        # paragraph indent on continuation lines). Insert a synthetic
-        # space between rows whose own tokens don't already end/start
-        # with one — otherwise "word\nnext" would concatenate as
-        # "wordnext" when packed onto the same line.
+        # Claude Code's continuation lines are consistently indented
+        # to col 2 (bullets, numbered lists, wrapped prose all use
+        # the same hanging indent). Match that: wrapped lines get a
+        # 2-space prefix. First line keeps whatever prefix Claude
+        # wrote (bullet, nothing, deeper indent) via start=0 in the
+        # gather loop below.
+        indent = 2
+        # Gather tokens from every row in document order. Row 0's
+        # content starts at col 0 so its natural prefix (bullet,
+        # leading indent, whatever Claude wrote) is preserved on the
+        # first emitted line. Continuation rows skip their own leading
+        # indent — our paragraph-level indent re-applies on wrapped
+        # lines instead. Insert a synthetic space between adjacent
+        # rows whose tokens don't already end/start with one.
         all_tokens: list[tuple[int, int, int]] = []
         for i, y in enumerate(pyte_ys):
             last = self._row_last_nonblank(y, cols)
-            start = indent if i == 0 else self._row_leading_indent(y, cols)
+            start = 0 if i == 0 else self._row_leading_indent(y, cols)
             row_tokens = self._tokenize_row(y, start, last)
             if i > 0 and row_tokens and all_tokens:
                 prev = all_tokens[-1]
@@ -533,27 +540,42 @@ class PtyTerminal(Widget, can_focus=True):
             for (ts, te) in row_tokens:
                 all_tokens.append((y, ts, te))
 
+        # Find a pyte row whose first `indent` cells are all spaces
+        # and source the indent span from there. For a bullet paragraph
+        # like `● text...`, row 0's first cells are `●` + ` `, not
+        # usable as indent — but row 1 (Claude's continuation) starts
+        # with the real leading spaces. Fall back to None (a span list
+        # entry of (-1, 0, indent) is a synthetic space run).
         indent_span = None
         if indent > 0:
-            # Indent comes from the first pyte row's first `indent` cells.
-            indent_span = (pyte_ys[0], 0, indent)
+            for y in pyte_ys:
+                row = self._screen.buffer[y]
+                if all((row[x].data or " ") == " " for x in range(indent)):
+                    indent_span = (y, 0, indent)
+                    break
+            if indent_span is None:
+                # Use the synthetic-space sentinel to paint `indent`
+                # default-style spaces.
+                indent_span = (-1, 0, indent)
 
         vrows: list[list[tuple[int, int, int]]] = []
         current: list[tuple[int, int, int]] = []
         current_w = 0
+        is_first_line = True  # first emitted virtual row — no indent prefix.
 
         def _start_line() -> None:
             nonlocal current, current_w
             current = []
             current_w = 0
-            if indent_span is not None:
+            if indent_span is not None and not is_first_line:
                 current.append(indent_span)
                 current_w = indent
 
         def _flush() -> None:
-            nonlocal current, current_w
+            nonlocal current, current_w, is_first_line
             if current:
                 vrows.append(current)
+                is_first_line = False
             current = []
             current_w = 0
 
@@ -607,13 +629,35 @@ class PtyTerminal(Widget, can_focus=True):
         _flush()
         return vrows
 
+    # How close to the right edge a row must end for us to treat it
+    # as a Claude-wrapped continuation. Small slack (<4 cols) lets us
+    # still detect wraps where Claude avoided splitting a trailing
+    # word — that row ends a few cols shy but was clearly a wrap.
+    _CLAUDE_WRAP_SLACK = 4
+
+    def _looks_claude_wrapped(self, y: int, cols: int) -> bool:
+        """True if pyte row y appears to be a Claude-wrapped row —
+        content reaches (or nearly reaches) the right edge, so the
+        next row is probably a continuation."""
+        last = self._row_last_nonblank(y, cols)
+        return last > 0 and cols - last <= self._CLAUDE_WRAP_SLACK
+
     def _pet_zone_virtual_rows(self, cols: int, narrow: int) -> list[list[tuple[int, int, int]]]:
         """Build virtual rows for pyte rows 0..PET_H-1.
 
-        Walks the zone, grouping consecutive non-blank non-chrome rows
-        into paragraphs that get reflowed together. Blank pyte rows
-        emit an empty virtual row (Claude's paragraph break). Chrome
-        rows (border chars) emit a single-span narrow slice, no reflow.
+        A paragraph is a run of consecutive non-blank non-chrome pyte
+        rows where every row except possibly the last reaches the
+        right edge (Claude wrapped them). We concatenate + re-wrap
+        those together, because Claude's row breaks inside a wrapped
+        paragraph are layout artifacts, not semantic.
+
+        Rows that don't reach the right edge are standalone: Claude
+        ended the line deliberately (diff entry, short code line,
+        bullet item). They get reflowed on their own — never merged
+        with the next row.
+
+        Blank pyte rows emit an empty virtual row; chrome rows emit a
+        single-span narrow slice.
         """
         out: list[list[tuple[int, int, int]]] = []
         paragraph: list[int] = []
@@ -628,7 +672,7 @@ class PtyTerminal(Widget, can_focus=True):
                 break
             if self._row_is_blank(y, cols):
                 _flush_paragraph()
-                out.append([])  # blank virtual row — Claude's break.
+                out.append([])
                 continue
             if self._row_has_border(y, cols):
                 _flush_paragraph()
@@ -636,6 +680,11 @@ class PtyTerminal(Widget, can_focus=True):
                 end = min(last, narrow) if last > 0 else narrow
                 out.append([(y, 0, end)])
                 continue
+            # Content row. A paragraph continues onto this row only if
+            # the previous row reached the right edge. Otherwise the
+            # previous row stood alone — flush it, start a new one here.
+            if paragraph and not self._looks_claude_wrapped(paragraph[-1], cols):
+                _flush_paragraph()
             paragraph.append(y)
         _flush_paragraph()
         return out
