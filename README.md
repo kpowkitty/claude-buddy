@@ -28,7 +28,7 @@ A gacha-rolled ASCII coding companion for [Claude Code](https://claude.com/claud
 - **Collection economy**: hatch tokens unlock on an escalating schedule based on your global level (sum of every buddy's pet level). Token 1 at 5 levels, token 2 at 15, token 3 at 30, token 4 at 50 — each token costs 5 more pet-levels than the last. Rolling a species you already own on `--tokens` burns the token but grants a duplicate shard; 5 shards can be spent via `--shards` for a guaranteed new species.
 - **Skills**: every buddy rolls 8 skill stats (wisdom, debugging, refactoring, etc.). Each species has a baseline range and a signature skill that rolls much higher.
 - **Embedded TUI**: `claude-buddy` launches Claude Code inside a Textual app, with your buddy animated as a floating overlay in the top-right reacting to what you're doing.
-- **L-shape reflow**: Claude's text wraps around the pet's reserved rectangle so nothing lands under the overlay. Once Claude's conversation fills past the pet zone, it gets the full terminal width back.
+- **L-shape reflow**: Claude's text wraps around the pet's reserved rectangle with word-aware wrapping and paragraph merging, so long prose reflows naturally beside the buddy instead of being cut off. Once Claude's conversation fills past the pet zone, it gets the full terminal width back.
 - **Hooks**: watches `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart` to shift mood (idle / attentive / watching / sleeping / petted / celebrating).
 - **Personality-driven speech**: your buddy can occasionally pipe up in character via Claude — wise Owlet quotes proverbs, Dragonling snarls at errors, Moonwyrm speaks in cosmic riddles. Uses your existing Claude Code auth (no separate API key).
 - **Pet your buddy**: `F1` closes its eyes into a smile, triggers a `prrr` speech bubble, and ticks up its `pets_received` counter.
@@ -88,6 +88,7 @@ All app-level hotkeys are function keys so they never collide with Claude's own 
 | Scroll wheel | Scroll through the Claude pane's history (pauses the live feed) |
 | `Shift-PageUp` / `Shift-PageDown` | Same, via keyboard |
 | `Shift-End` | Snap back to the live tail |
+| `Shift-drag` | Select text (handled by your terminal — the app passes the gesture through) |
 | Any keystroke | Resumes live tail if you're scrolled back |
 
 ### Gacha menu (F2)
@@ -140,9 +141,9 @@ All `/buddy` commands work inside Claude (whether launched via `claude-buddy` or
 
 **Hook pipeline.** Claude Code fires 5 lifecycle events. Each hook script atomically writes `state.json` with the current mood + tool + timestamp. The Textual app polls that file to drive the sprite animation, mood, and optional speech bubble. Speech is produced by shelling out to `claude -p` via `speak.py` — same auth, no separate API key.
 
-**L-shape reflow.** The pet reserves a 24×18 rectangle in the top-right (chat bubble + sprite + name + XP + time). Inside those rows, Claude's text is wrapped at `cols - 24` by a custom `pyte.HistoryScreen` subclass (`lreflow.py`). Once Claude's content extends below the pet zone, the widget tells Claude it has the full terminal width and reflows the visible content via Ctrl+L. On resize, the pane auto-refreshes so no stale pixels linger.
+**L-shape reflow.** The pet reserves a 24×18 rectangle in the top-right (chat bubble + sprite + name + XP + time). Reflow happens at render time in `pty_terminal.py` — every frame, pyte's buffer is walked and rows that fall inside the pet zone are re-wrapped to `cols - 24`. The wrap is word-aware (never cuts a word mid-token) and paragraph-aware (merges tokens across consecutive wrapped pyte rows so prose reflows naturally, while standalone rows like diff lines are left alone). Chrome rows with box-drawing borders bypass the reflow entirely so Claude's prompt box never gets mangled.
 
-**Animation.** Sprites animate on independent cycles: a steady 1-second tail wag for species with a `tail_b` alternate frame, layered with a ~10-second blink. Sleeping buddies stop wagging entirely.
+**Animation.** Sprites animate on independent cycles. Species can declare either a `tail_b` alternate frame (2-frame A/B cycle, ~1s wag) or a `frames` list for multi-frame animation (ember flicker, cephalo tentacle ripple, moonwyrm stars — ~0.8s cycle, keeps running through every awake mood). A periodic blink (~25s) layers on top. Sleeping buddies hold still.
 
 ## File structure
 
@@ -215,14 +216,13 @@ All correctness checks (render logic, input routing, state schema, reflow contra
 
 ### Debug flags
 
-- `BUDDY_LREFLOW=0` — disable the L-shape reflow (falls back to plain `pyte.HistoryScreen`). The pet overlay will cover live Claude text; useful for isolating reflow bugs.
 - `BUDDY_STATE_DIR=/path/to/dir` — redirect reads and writes of state/progression away from `~/.claude/buddy/`. The TUI shows a red **TEST MODE** banner so you can't forget.
 
 ## Contributing
 
 PRs welcome! Especially for:
 
-- **New species** — add to `buddy/species.py` (art, skill ranges, signature skill) and `buddy/personality.py` (voice, event weights). Optionally include a `tail_b` dict for a wag animation.
+- **New species** — add to `buddy/species.py` (art, skill ranges, signature skill) and `buddy/personality.py` (voice, event weights). Optionally include a `tail_b` dict for a 2-frame wag, or a `frames` list for multi-frame animation.
 - **Better animations** — tweak `buddy/sprites.py` for mood-specific frames.
 - **New moods or hook reactions** — extend the mood logic in `buddy/state.py` and sprite handling in `buddy/sprites.py`.
 - **Layout / rendering fixes** — the PTY + L-reflow composition in `buddy/tui/` has known rough edges in very narrow terminals (<80 cols).

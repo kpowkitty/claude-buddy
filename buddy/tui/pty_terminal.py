@@ -192,27 +192,14 @@ class PtyTerminal(Widget, can_focus=True):
         except Exception:
             pass
 
-        # HistoryScreen, not plain Screen: gives us scrollback so when Claude's
-        # input box at the bottom grows past the visible area, lines flow into
-        # history rather than being silently dropped.
+        # HistoryScreen subclass for scrollback + the content_went_wide
+        # signal that drives the narrow↔wide COLUMNS flip we send Claude.
         # `ratio` controls how many lines one prev_page/next_page moves —
         # 0.15 gives a gentler wheel tick than pyte's default half-screen.
-        # L-reflow reserves the top-right rectangle so Claude's text
-        # wraps around the floating habitat pane. Set BUDDY_LREFLOW=0
-        # to fall back to a plain HistoryScreen for debugging — the
-        # habitat overlay will then cover live text.
-        if os.environ.get("BUDDY_LREFLOW") == "0":
-            self._screen = pyte.HistoryScreen(cols, rows, history=2000, ratio=0.15)
-        else:
-            from lreflow import LReflowHistoryScreen
-            # Reserved rectangle: bubble(7) + sprite(7) + name(1) + xp(2)
-            # + time(1) = 18 rows, 24 cols (HABITAT_WIDTH). Claude's text
-            # wraps at cols-24 in rows 0..17, and at cols from row 18 down.
-            # If skills panel is toggled, Claude's text there is occluded
-            # under the panel until the user toggles it off — acceptable.
-            self._screen = LReflowHistoryScreen(
-                cols, rows, pet_w=PET_W, pet_h=PET_H, history=2000, ratio=0.15,
-            )
+        from lreflow import LReflowHistoryScreen
+        self._screen = LReflowHistoryScreen(
+            cols, rows, pet_w=PET_W, pet_h=PET_H, history=2000, ratio=0.15,
+        )
         # Wire query responses (e.g. cursor-position via \x1b[6n) back to the
         # child. Without this, Claude's UI assumes the terminal is unresponsive
         # and falls back to single-line layouts (the AskUserQuestion "Other"
