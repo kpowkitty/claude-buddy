@@ -280,6 +280,33 @@ def do_shard_hatch(collection: dict, rng: random.Random) -> int:
 # ─── silent helpers for callers (e.g. TUI gacha menu) ──────────────────────
 
 
+def spend_token_hatch(rng: random.Random | None = None) -> tuple[bool, str, dict | None]:
+    """Spend one hatch token (or the starter gift) for a random roll.
+
+    Silent wrapper around do_tokens_hatch for the TUI. Returns (ok,
+    message, entry). Dupes count as ok=True since the token was spent
+    and a shard was granted — the message explains. Writes
+    progression.json on success.
+    """
+    rng = rng or random.Random()
+    collection = load_collection()
+    is_starter = len(all_buddies(collection)) == 0
+    if not is_starter and hatches_available(collection) <= 0:
+        return False, "No hatches available yet.", None
+    rarity, species = roll_species(rng)
+    skills = roll_skills(rng, species, rarity)
+    if has_species(collection, species["id"]):
+        collection = dict(collection)
+        collection["hatches_performed"] = int(collection.get("hatches_performed", 0)) + 1
+        collection = add_shard(collection, 1)
+        save_collection(collection)
+        return True, f"{species['name']} — duplicate! +1 shard.", None
+    entry = _entry_for(species, rarity, skills)
+    collection = add_buddy(collection, species["id"], entry)
+    save_collection(collection)
+    return True, f"Hatched {species['name']}!", entry
+
+
 def redeem_shards_hatch(rng: random.Random | None = None) -> tuple[bool, str, dict | None]:
     """Spend SHARDS_PER_REDEEM shards for a guaranteed-new-species roll.
 

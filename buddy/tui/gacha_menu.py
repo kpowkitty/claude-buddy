@@ -47,6 +47,7 @@ if str(_BUDDY) not in sys.path:
 
 from collection import (  # noqa: E402
     SHARDS_PER_REDEEM,
+    _buddy_level,
     active_buddy,
     all_buddies,
     global_level,
@@ -54,7 +55,6 @@ from collection import (  # noqa: E402
     hatches_available,
     migrate,
     shards,
-    tokens_earned,
 )
 import hatch as _hatch  # noqa: E402
 from species import RARITY_ORDER, SPECIES, find_species  # noqa: E402
@@ -140,7 +140,7 @@ class _Slot(Widget, can_focus=True):
 
         if y == 8:
             if self.filled:
-                lvl = int((self.entry or {}).get("level", 1))
+                lvl = _buddy_level(self.entry or {})
                 return _center(f"lvl {lvl}", w, Style(color="grey70"))
             return _center("locked", w, Style(color="grey35"))
 
@@ -182,7 +182,6 @@ class _Header(Static):
     def refresh_content(self) -> None:
         c = self.collection
         gl = global_level(c)
-        tokens = tokens_earned(c)
         avail = hatches_available(c)
         sh = shards(c)
         n_buddies = len(all_buddies(c))
@@ -190,11 +189,9 @@ class _Header(Static):
         parts = [
             f"[b]{n_buddies}[/] buddy(s)",
             f"global lvl [b]{gl}[/]",
-            f"tokens [b]{tokens}[/]",
+            f"tokens [b]{avail}[/]",
             f"shards [b]{sh}[/]",
         ]
-        if avail > 0:
-            parts.append(f"[cyan]{avail} hatch(es) ready[/]")
         banner = ""
         if sh >= SHARDS_PER_REDEEM:
             banner = f"  [on #883333][b white] ⚑  hatch available — press [H] or click  [/][/]"
@@ -262,7 +259,7 @@ class GachaMenu(ModalScreen):
         Binding("up", "move(0,-1)", "↑", show=False),
         Binding("down", "move(0,1)", "↓", show=False),
         Binding("enter", "select", "Switch", show=True),
-        Binding("h", "hatch_shards", "Hatch (shards)", show=True),
+        Binding("h", "hatch", "Hatch", show=True),
     ]
 
     def __init__(self) -> None:
@@ -272,6 +269,13 @@ class GachaMenu(ModalScreen):
         # that rarity. Cursor (ry, rx) picks a slot.
         self._rows: list[list[_Slot]] = []
         self._cursor: tuple[int, int] = (0, 0)
+        # Two-step hatch: press h → _awaiting_hatch_choice = True, prompt
+        # footer; next keypress t/s resolves the hatch, anything else
+        # cancels. Keeps the economy decision explicit.
+        self._awaiting_hatch_choice: bool = False
+        # Footer clear timer — toasts disappear after 7s so status like
+        # "Not enough tokens" doesn't linger indefinitely.
+        self._footer_timer = None
 
     def compose(self):
         panel = Container(id="gacha-panel")
@@ -392,20 +396,82 @@ class GachaMenu(ModalScreen):
             # Re-read the collection, update active highlights, close.
             self.dismiss(("switched", slot.species_id))
 
-    def action_hatch_shards(self) -> None:
+    def action_hatch(self) -> None:
+        """Step 1: arm the hatch prompt. Footer asks 'tokens or shards?';
+        the next t/s keystroke completes the hatch, any other key cancels."""
+        self._awaiting_hatch_choice = True
+        self._set_footer("Use tokens or shards? [b]t[/] / [b]s[/]", clear_after=None)
+
+    def _hatch_with_tokens(self) -> None:
+        if hatches_available(self._collection) <= 0:
+            self._set_footer("[red]Not enough tokens (1 required to roll)[/]")
+            return
+        ok, msg, _entry = _hatch.spend_token_hatch()
+        if ok:
+            self.dismiss(("hatched", msg))
+        else:
+            self._set_footer(f"[red]{msg}[/]")
+
+    def _hatch_with_shards(self) -> None:
+        if shards(self._collection) < SHARDS_PER_REDEEM:
+            self._set_footer(
+                f"[red]Not enough shards ({SHARDS_PER_REDEEM} required to roll)[/]"
+            )
+            return
         ok, msg, _entry = _hatch.redeem_shards_hatch()
         if ok:
             self.dismiss(("hatched", msg))
         else:
-            # Surface the reason but stay open so the user can keep browsing.
-            self.query_one("#gacha-footer", Static).update(f"[red]{msg}[/]")
+            self._set_footer(f"[red]{msg}[/]")
+
+    # Default lifetime for a toast in the footer, seconds. Errors and
+    # confirmations auto-clear so "Not enough tokens" doesn't linger.
+    _FOOTER_TOAST_SECONDS = 7.0
+
+    def _set_footer(self, markup: str, *, clear_after: float | None = _FOOTER_TOAST_SECONDS) -> None:
+        """Update the footer text. If clear_after is set, schedule a
+        revert to the default key hints after that many seconds."""
+        self.query_one("#gacha-footer", Static).update(markup)
+        if self._footer_timer is not None:
+            try:
+                self._footer_timer.stop()
+            except Exception:
+                pass
+            self._footer_timer = None
+        if clear_after is not None:
+            self._footer_timer = self.set_timer(clear_after, self._reset_footer)
+
+    def _reset_footer(self) -> None:
+        self._awaiting_hatch_choice = False
+        self.query_one("#gacha-footer", Static).update(
+            "↑↓←→ navigate  ·  Enter switch  ·  H hatch  ·  q close"
+        )
+        self._footer_timer = None
+
+    async def on_key(self, event: events.Key) -> None:
+        # While the hatch prompt is armed, intercept t/s/other before
+        # Textual dispatches to the normal bindings.
+        if self._awaiting_hatch_choice:
+            key = event.key
+            self._awaiting_hatch_choice = False
+            if key == "t":
+                event.stop()
+                self._hatch_with_tokens()
+            elif key == "s":
+                event.stop()
+                self._hatch_with_shards()
+            else:
+                # Any other key cancels the hatch prompt.
+                event.stop()
+                self._reset_footer()
 
     async def on_click(self, event: events.Click) -> None:
-        # Click on the header shard banner = hatch. The banner lives inside
-        # the header markup, so any click on the header when shards>=5
-        # counts as the gesture.
+        # Click on the header shard banner = arm the hatch prompt.
         if event.widget is None:
             return
         widget = event.widget
-        if widget.id == "gacha-header" and shards(self._collection) >= SHARDS_PER_REDEEM:
-            self.action_hatch_shards()
+        if widget.id == "gacha-header" and (
+            hatches_available(self._collection) > 0
+            or shards(self._collection) >= SHARDS_PER_REDEEM
+        ):
+            self.action_hatch()

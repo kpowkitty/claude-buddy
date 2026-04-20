@@ -18,6 +18,11 @@ class KeyLike(Protocol):
 _NAMED_KEYS: dict[str, bytes] = {
     "enter": b"\r",
     "return": b"\r",
+    # Shift+Enter / Alt+Enter insert a literal newline in Claude Code's
+    # prompt without submitting. Claude accepts the ESC+CR sequence
+    # (the classic meta-enter encoding) from either binding.
+    "shift+enter": b"\x1b\r",
+    "alt+enter": b"\x1b\r",
     "backspace": b"\x7f",
     "tab": b"\t",
     "shift+tab": b"\x1b[Z",

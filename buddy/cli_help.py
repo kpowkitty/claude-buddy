@@ -15,6 +15,7 @@ from typing import Optional
 from collection import (
     LEVELS_PER_TOKEN_STEP,
     SHARDS_PER_REDEEM,
+    _buddy_level,
     active_buddy,
     all_buddies,
     global_level,
@@ -41,7 +42,7 @@ def _status_block(collection: dict) -> list[str]:
     buddy = active_buddy(collection)
     if buddy:
         name = buddy.get("name") or buddy.get("species_name") or "buddy"
-        level = int(buddy.get("level", 1))
+        level = _buddy_level(buddy)
         lines.append(
             f"  {_BOLD}{name}{_RESET} "
             f"{_DIM}({buddy.get('species_name', '?')}, {buddy.get('rarity', '?')}, lvl {level}){_RESET}"
@@ -57,7 +58,7 @@ def _status_block(collection: dict) -> list[str]:
     lines.append(
         f"  Collection: {n_buddies} buddy(s)  ·  "
         f"global lvl {_BOLD}{gl}{_RESET}  ·  "
-        f"tokens {tokens_earned(collection)}  ·  "
+        f"tokens {available}  ·  "
         f"shards {sh}"
     )
 

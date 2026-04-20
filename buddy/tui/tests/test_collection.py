@@ -164,8 +164,22 @@ def test_add_buddy_respects_set_active_false() -> None:
 # ─── derived economy ─────────────────────────────────────────────────────────
 
 
+# Helper: level is derived as xp//20 where xp = prompts*2 + tools//3.
+# 10 prompts → xp 20 → level 1. So prompts = 10*L gives level L exactly.
+def _buddy_at_level(level: int, species_id: str = "slime") -> dict:
+    return {
+        "species_id": species_id,
+        "total_prompts": 10 * level,
+        "total_tools": 0,
+    }
+
+
 def test_global_level_single_buddy() -> None:
-    c = migrate({"species_id": "slime", "level": 10})
+    c = {
+        "active_id": "slime",
+        "buddies": {"slime": _buddy_at_level(10)},
+        "hatches_performed": 1, "shards": 0,
+    }
     assert global_level(c) == 10
 
 
@@ -173,8 +187,8 @@ def test_global_level_sums_across_buddies() -> None:
     c = {
         "active_id": "slime",
         "buddies": {
-            "slime": {"species_id": "slime", "level": 10},
-            "ember": {"species_id": "ember", "level": 6},
+            "slime": _buddy_at_level(10),
+            "ember": _buddy_at_level(6, "ember"),
         },
         "hatches_performed": 2, "shards": 0,
     }
@@ -186,7 +200,7 @@ def test_tokens_earned_triangular_schedule() -> None:
     def one_buddy(level: int) -> dict:
         return {
             "active_id": "slime",
-            "buddies": {"slime": {"species_id": "slime", "level": level}},
+            "buddies": {"slime": _buddy_at_level(level)},
             "hatches_performed": 1, "shards": 0,
         }
 
@@ -214,7 +228,7 @@ def test_hatches_available_zero_at_install() -> None:
 def test_hatches_available_earns_at_first_threshold() -> None:
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 5}},
+        "buddies": {"slime": _buddy_at_level(5)},
         "hatches_performed": 1, "shards": 0,
     }
     assert tokens_earned(c) == 1
@@ -225,8 +239,8 @@ def test_hatches_available_decrements_after_second_hatch() -> None:
     c = {
         "active_id": "slime",
         "buddies": {
-            "slime": {"species_id": "slime", "level": 5},
-            "ember": {"species_id": "ember", "level": 1},
+            "slime": _buddy_at_level(5),
+            "ember": _buddy_at_level(1, "ember"),
         },
         "hatches_performed": 2, "shards": 0,
     }
@@ -238,7 +252,7 @@ def test_hatches_available_decrements_after_second_hatch() -> None:
 def test_hatches_available_accumulates() -> None:
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 30}},
+        "buddies": {"slime": _buddy_at_level(30)},
         "hatches_performed": 1, "shards": 0,
     }
     # global 30 → 3 tokens earned (thresholds 5, 15, 30). starter free.
@@ -253,16 +267,16 @@ def test_hoarding_does_not_accelerate() -> None:
     you spent them or not."""
     hoarder = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 30}},
+        "buddies": {"slime": _buddy_at_level(30)},
         "hatches_performed": 1, "shards": 0,
     }
     spender = {
         "active_id": "d",
         "buddies": {
-            "a": {"species_id": "a", "level": 10},
-            "b": {"species_id": "b", "level": 10},
-            "c": {"species_id": "c", "level": 5},
-            "d": {"species_id": "d", "level": 5},
+            "a": _buddy_at_level(10, "a"),
+            "b": _buddy_at_level(10, "b"),
+            "c": _buddy_at_level(5, "c"),
+            "d": _buddy_at_level(5, "d"),
         },
         "hatches_performed": 4, "shards": 0,
     }

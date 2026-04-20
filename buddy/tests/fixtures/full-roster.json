@@ -1,0 +1,183 @@
+{
+  "active_id": "slime",
+  "buddies": {
+    "slime": {
+      "species_id": "slime",
+      "species_name": "Slime",
+      "rarity": "common",
+      "flavor": "A gelatinous companion. Low-maintenance, high vibes.",
+      "signature_skill": "patience",
+      "skills": {
+        "wisdom": 30, "debugging": 25, "refactoring": 30, "testing": 25,
+        "documentation": 30, "speed": 25, "creativity": 30, "patience": 65
+      },
+      "name": "blob",
+      "hatched_at": 1700000000,
+      "first_seen_ts": 1700000000,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "pebble": {
+      "species_id": "pebble",
+      "species_name": "Pebble",
+      "rarity": "common",
+      "flavor": "A small rock that blinks sometimes. Loyal.",
+      "signature_skill": "patience",
+      "skills": {
+        "wisdom": 20, "debugging": 20, "refactoring": 20, "testing": 20,
+        "documentation": 20, "speed": 20, "creativity": 20, "patience": 80
+      },
+      "name": null,
+      "hatched_at": 1700000100,
+      "first_seen_ts": 1700000100,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "sprout": {
+      "species_id": "sprout",
+      "species_name": "Sprout",
+      "rarity": "common",
+      "flavor": "A leaflet with ambition. Photosynthesizes your code.",
+      "signature_skill": "creativity",
+      "skills": {
+        "wisdom": 30, "debugging": 30, "refactoring": 30, "testing": 30,
+        "documentation": 30, "speed": 30, "creativity": 65, "patience": 30
+      },
+      "name": null,
+      "hatched_at": 1700000200,
+      "first_seen_ts": 1700000200,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "moth": {
+      "species_id": "moth",
+      "species_name": "Moth",
+      "rarity": "uncommon",
+      "flavor": "Drawn to glowing screens. You are its sun.",
+      "signature_skill": "documentation",
+      "skills": {
+        "wisdom": 35, "debugging": 35, "refactoring": 35, "testing": 35,
+        "documentation": 70, "speed": 35, "creativity": 35, "patience": 35
+      },
+      "name": null,
+      "hatched_at": 1700000300,
+      "first_seen_ts": 1700000300,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "pollywog": {
+      "species_id": "pollywog",
+      "species_name": "Pollywog",
+      "rarity": "uncommon",
+      "flavor": "Half tadpole, half opinion. Will evolve.",
+      "signature_skill": "refactoring",
+      "skills": {
+        "wisdom": 35, "debugging": 35, "refactoring": 70, "testing": 35,
+        "documentation": 35, "speed": 35, "creativity": 35, "patience": 35
+      },
+      "name": null,
+      "hatched_at": 1700000400,
+      "first_seen_ts": 1700000400,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "ember": {
+      "species_id": "ember",
+      "species_name": "Ember",
+      "rarity": "uncommon",
+      "flavor": "A flickering flame with a face. Warm to the touch.",
+      "signature_skill": "speed",
+      "skills": {
+        "wisdom": 35, "debugging": 35, "refactoring": 35, "testing": 35,
+        "documentation": 35, "speed": 75, "creativity": 35, "patience": 35
+      },
+      "name": null,
+      "hatched_at": 1700000500,
+      "first_seen_ts": 1700000500,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "owlet": {
+      "species_id": "owlet",
+      "species_name": "Owlet",
+      "rarity": "rare",
+      "flavor": "Tiny owl. Stays up later than you do.",
+      "signature_skill": "wisdom",
+      "skills": {
+        "wisdom": 80, "debugging": 40, "refactoring": 40, "testing": 40,
+        "documentation": 40, "speed": 40, "creativity": 40, "patience": 40
+      },
+      "name": null,
+      "hatched_at": 1700000600,
+      "first_seen_ts": 1700000600,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "cephalo": {
+      "species_id": "cephalo",
+      "species_name": "Cephalo",
+      "rarity": "rare",
+      "flavor": "A pocket-sized octopus. Eight opinions, one heart.",
+      "signature_skill": "wisdom",
+      "skills": {
+        "wisdom": 70, "debugging": 30, "refactoring": 30, "testing": 30,
+        "documentation": 30, "speed": 30, "creativity": 30, "patience": 30
+      },
+      "name": null,
+      "hatched_at": 1700000700,
+      "first_seen_ts": 1700000700,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "dragonling": {
+      "species_id": "dragonling",
+      "species_name": "Dragonling",
+      "rarity": "epic",
+      "flavor": "Hoards semicolons. Hatched with teeth.",
+      "signature_skill": "debugging",
+      "skills": {
+        "wisdom": 55, "debugging": 95, "refactoring": 55, "testing": 55,
+        "documentation": 55, "speed": 55, "creativity": 55, "patience": 55
+      },
+      "name": null,
+      "hatched_at": 1700000800,
+      "first_seen_ts": 1700000800,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "kitsune": {
+      "species_id": "kitsune",
+      "species_name": "Kitsune",
+      "rarity": "epic",
+      "flavor": "A fox with one tail for now. More later, maybe.",
+      "signature_skill": "testing",
+      "skills": {
+        "wisdom": 55, "debugging": 55, "refactoring": 55, "testing": 95,
+        "documentation": 55, "speed": 55, "creativity": 55, "patience": 55
+      },
+      "name": null,
+      "hatched_at": 1700000900,
+      "first_seen_ts": 1700000900,
+      "total_prompts": 50,
+      "total_tools": 150
+    },
+    "moonwyrm": {
+      "species_id": "moonwyrm",
+      "species_name": "Moonwyrm",
+      "rarity": "legendary",
+      "flavor": "A celestial serpent. You pulled this. The odds were 1 in 100.",
+      "signature_skill": "wisdom",
+      "skills": {
+        "wisdom": 100, "debugging": 70, "refactoring": 70, "testing": 70,
+        "documentation": 70, "speed": 70, "creativity": 70, "patience": 70
+      },
+      "name": null,
+      "hatched_at": 1700001000,
+      "first_seen_ts": 1700001000,
+      "total_prompts": 50,
+      "total_tools": 150
+    }
+  },
+  "hatches_performed": 11,
+  "shards": 0
+}

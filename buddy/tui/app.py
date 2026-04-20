@@ -98,7 +98,14 @@ class BuddyApp(App):
         Binding("f3", "toggle_skills", "Skills", show=True),
         Binding("f4", "toggle_habitat", "Toggle buddy", show=True),
         Binding("f5", "refresh_view", "Refresh", show=True),
+        # Display-only hint for the terminal-native selection gesture.
+        # The action is a no-op; Textual never routes shift-drag here
+        # (the outer terminal captures it first, which is the point).
+        Binding("shift+drag", "noop", "Select", show=True, key_display="shift+drag"),
     ]
+
+    def action_noop(self) -> None:
+        pass
 
     def __init__(self, command: Sequence[str], **kwargs) -> None:
         super().__init__(**kwargs)
@@ -134,9 +141,12 @@ class BuddyApp(App):
         habitat = self.query_one("#habitat", Habitat)
         self._habitat_visible = not self._habitat_visible
         habitat.display = self._habitat_visible
-        # Tell the pty its size changed so Claude reflows.
+        # Tell the PTY about the habitat state change: it gates the
+        # L-shape reflow and decides whether Claude gets narrow or
+        # full-width COLUMNS. set_habitat_visible triggers the resize
+        # + Ctrl+L repaint internally.
         pty = self.query_one("#pty", PtyTerminal)
-        self.call_after_refresh(pty.on_resize)
+        self.call_after_refresh(pty.set_habitat_visible, self._habitat_visible)
 
     def action_toggle_skills(self) -> None:
         self.query_one("#habitat", Habitat).toggle_skills()

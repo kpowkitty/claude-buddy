@@ -90,10 +90,23 @@ class SpritePanel(Widget):
             return blank
         frames = frames_for(v.species_id, v.mood)
         # Animation cadence matches buddy/buddy.py: idle blink every 25s,
-        # sleeping = still (frame B === frame A for tail species),
-        # awake-with-tail = steady wag.
+        # sleeping = still, awake-with-tail = steady wag, multi-frame
+        # species (ember, cephalo, moonwyrm) flicker/ripple every mood.
         sprite = None
-        if v.mood == "idle":
+        is_multi = len(frames) > 2
+        if is_multi and v.mood != "sleeping":
+            # Multi-frame species animate across every awake mood —
+            # a flame doesn't freeze when it's attentive. ~0.8s cycle.
+            # Blink every 25s during idle only, for the hint of life.
+            if v.mood == "idle":
+                cycle = self._tick % 250
+                if cycle < 2:
+                    sprite = blink_frame(v.species_id)
+                else:
+                    idx = (self._tick // 8) % len(frames)
+            else:
+                idx = (self._tick // 8) % len(frames)
+        elif v.mood == "idle":
             if species.get("tail_b"):
                 # Tail species: wag every 10 ticks (~1s), AND briefly blink
                 # every 100 ticks (~10s). Two independent cycles layered.

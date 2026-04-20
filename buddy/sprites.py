@@ -78,6 +78,12 @@ def _apply_tail_b(frame_b, species):
     return [tail_b.get(i, line) for i, line in enumerate(frame_b)]
 
 
+def _apply_overrides(base, overrides):
+    """Overlay a {row_index: line} dict onto base art. Same shape as
+    `tail_b` but generalized — used by multi-frame species like ember."""
+    return [overrides.get(i, line) for i, line in enumerate(base)]
+
+
 def blink_frame(species_id: str):
     """Eyes-closed variant of the base art. Used by callers that animate
     the tail and blink on independent cycles — they grab the wag from
@@ -89,11 +95,27 @@ def blink_frame(species_id: str):
 
 
 def frames_for(species_id: str, mood: str):
-    """Return a list of 2 frames (each a list of strings) for given species and mood."""
+    """Return a list of frames (each a list of strings) for given species
+    and mood. Usually 2 frames (A/B), but species with a `frames` list
+    (e.g. ember's flicker) return N frames for the habitat to cycle.
+
+    Multi-frame species keep flickering through every awake mood — the
+    animation is part of their identity (a flame doesn't freeze when
+    you look at it). We sub the mood's eyes onto each variant and
+    return the whole list. Sleeping is the one exception: still pet.
+    """
     _, species = find_species(species_id)
     if species is None:
         return [["?"], ["?"]]
     base = list(species["art"])
+
+    # Multi-frame species: animate across all awake moods.
+    if mood != "sleeping" and species.get("frames"):
+        variants = [list(base)] + [_apply_overrides(base, ov) for ov in species["frames"]]
+        mood_eye = {"attentive": "O", "watching": "@", "celebrating": "^", "petted": "-"}.get(mood)
+        if mood_eye is not None:
+            variants = [_sub_eyes(v, mood_eye) for v in variants]
+        return variants
 
     if mood == "idle":
         # Frame A = base. Frame B = blink (eyes → -).
