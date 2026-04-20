@@ -159,9 +159,23 @@ def add_buddy(collection: dict, buddy_id: str, entry: dict, *, set_active_to_new
 
 # ── derived values (pure functions of the stored collection) ─────────────────
 
+# XP → level math mirrors tui.state_adapter's formula so both the
+# habitat panel and the token/global-level math agree. Prompts are
+# intentional user effort; tool calls are Claude rummaging. Linear
+# xp→level so progress is predictable (the triangular token schedule
+# below provides the scaling).
+def _buddy_level(buddy: dict) -> int:
+    prompts = int(buddy.get("total_prompts", 0))
+    tools = int(buddy.get("total_tools", 0))
+    xp = prompts * 2 + tools // 3
+    return xp // 20
+
+
 def global_level(collection: dict) -> int:
-    """Sum of every buddy's pet level — the roster's combined progress."""
-    return sum(int(b.get("level", 1)) for b in all_buddies(collection))
+    """Sum of every buddy's derived pet level — the roster's combined
+    progress. Computed from each buddy's xp counters so the displayed
+    level (habitat panel) and the token schedule always agree."""
+    return sum(_buddy_level(b) for b in all_buddies(collection))
 
 
 def tokens_earned(collection: dict) -> int:

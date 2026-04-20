@@ -90,10 +90,10 @@ def test_tokens_hatch_refused_when_no_token(capsys) -> None:
 
 
 def test_tokens_hatch_succeeds_when_token_available() -> None:
-    # pet-level 40 → global 20 → 1 token earned, 1 available after starter.
+    # 100 prompts → xp 200 → level 10 → global 10 → ≥1 token earned.
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 40}},
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 100}},
         "hatches_performed": 1, "shards": 0,
     }
     hatch.save_collection(c)
@@ -112,7 +112,7 @@ def test_duplicate_roll_burns_token_and_grants_shard(capsys) -> None:
     # Have slime; a token ready; roll slime again.
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 40}},
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 100}},
         "hatches_performed": 1, "shards": 0,
     }
     hatch.save_collection(c)
@@ -130,9 +130,10 @@ def test_duplicate_roll_burns_token_and_grants_shard(capsys) -> None:
 
 def test_five_duplicates_accumulate_to_redeem_threshold() -> None:
     # Stack five dupes; verify shards reach 5 and user can redeem.
+    # 1000 prompts → xp 2000 → level 100 → plenty of tokens.
     c = {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 200}},  # lots of tokens
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 1000}},
         "hatches_performed": 1, "shards": 0,
     }
     hatch.save_collection(c)

@@ -40,6 +40,7 @@ print a reminder.
 - **two-buddies** — slime + ember. Good for testing `/buddy switch`.
 - **ready-to-hatch** — one level-40 slime. One token available, no shards.
 - **five-shards** — one buddy and 5 shards ready to redeem.
+- **full-roster** — every species unlocked. For reviewing sprites / animations across the whole roster.
 
 Add new fixtures by dropping a `<name>.json` into `fixtures/`. They're
 committed to the repo (templates), but the `env/` directory the toggle

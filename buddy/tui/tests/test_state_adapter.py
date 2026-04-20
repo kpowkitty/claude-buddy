@@ -104,19 +104,19 @@ def test_xp_computed_from_counters(tmp_path: Path) -> None:
     })
     _write(tmp_path / "state.json", {})
     view = read_view(tmp_path / "state.json", tmp_path / "progression.json")
-    # xp = total_prompts + total_tools // 3  =  30 + 5 = 35
-    assert view.xp == 35
+    # xp = prompts*2 + tools//3 = 60 + 5 = 65
+    assert view.xp == 65
 
 
 def test_level_computed_from_xp(tmp_path: Path) -> None:
     _write(tmp_path / "progression.json", {
         "species_id": "pebble",
-        "total_prompts": 40,  # xp = 40
+        "total_prompts": 40,  # xp = 80
     })
     _write(tmp_path / "state.json", {})
     view = read_view(tmp_path / "state.json", tmp_path / "progression.json")
-    # level = int(sqrt(xp / 10)) = int(sqrt(4)) = 2
-    assert view.level == 2
+    # level = xp // 20 = 4
+    assert view.level == 4
 
 
 def test_level_zero_when_no_xp(tmp_path: Path) -> None:

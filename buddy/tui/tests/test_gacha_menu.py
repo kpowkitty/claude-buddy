@@ -126,10 +126,10 @@ async def test_enter_on_another_filled_slot_switches(monkeypatch, tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_h_key_redeems_shards_when_available(monkeypatch, tmp_path) -> None:
+async def test_h_then_s_redeems_shards_when_available(monkeypatch, tmp_path) -> None:
     prog = _seed(monkeypatch, tmp_path, {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 2}},
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 20}},
         "hatches_performed": 6, "shards": 5,
     })
     app = BuddyApp(["/bin/cat"])
@@ -137,23 +137,24 @@ async def test_h_key_redeems_shards_when_available(monkeypatch, tmp_path) -> Non
         await pilot.pause(0.1)
         await pilot.press("f2")
         await pilot.pause(0.1)
+        # h arms the prompt; s picks the shards path.
         await pilot.press("h")
+        await pilot.pause(0.1)
+        await pilot.press("s")
         await pilot.pause(0.1)
 
         saved = json.loads(prog.read_text())
-        # A new buddy should have been added (guaranteed-new-species roll).
         assert len(saved["buddies"]) == 2
-        # Shards consumed.
         assert saved["shards"] == 0
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)
 
 
 @pytest.mark.asyncio
-async def test_h_key_noop_without_enough_shards(monkeypatch, tmp_path) -> None:
+async def test_h_then_s_errors_without_enough_shards(monkeypatch, tmp_path) -> None:
     prog = _seed(monkeypatch, tmp_path, {
         "active_id": "slime",
-        "buddies": {"slime": {"species_id": "slime", "level": 2}},
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 20}},
         "hatches_performed": 1, "shards": 2,
     })
     app = BuddyApp(["/bin/cat"])
@@ -163,10 +164,62 @@ async def test_h_key_noop_without_enough_shards(monkeypatch, tmp_path) -> None:
         await pilot.pause(0.1)
         await pilot.press("h")
         await pilot.pause(0.1)
+        await pilot.press("s")
+        await pilot.pause(0.1)
 
         saved = json.loads(prog.read_text())
-        # Unchanged.
+        # Hatch refused — collection unchanged.
         assert len(saved["buddies"]) == 1
         assert saved["shards"] == 2
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_h_then_t_spends_token_when_available(monkeypatch, tmp_path) -> None:
+    prog = _seed(monkeypatch, tmp_path, {
+        "active_id": "slime",
+        # 100 prompts → xp 200 → level 10 → 2 tokens earned, 2 available.
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 100}},
+        "hatches_performed": 1, "shards": 0,
+    })
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        await pilot.press("f2")
+        await pilot.pause(0.1)
+        await pilot.press("h")
+        await pilot.pause(0.1)
+        await pilot.press("t")
+        await pilot.pause(0.1)
+
+        saved = json.loads(prog.read_text())
+        # hatches_performed bumped, roster may or may not have grown
+        # depending on the (seeded) roll — but the token was spent.
+        assert saved["hatches_performed"] == 2
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_h_then_t_errors_without_tokens(monkeypatch, tmp_path) -> None:
+    prog = _seed(monkeypatch, tmp_path, {
+        "active_id": "slime",
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 0}},
+        "hatches_performed": 1, "shards": 0,
+    })
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        await pilot.press("f2")
+        await pilot.pause(0.1)
+        await pilot.press("h")
+        await pilot.pause(0.1)
+        await pilot.press("t")
+        await pilot.pause(0.1)
+
+        saved = json.loads(prog.read_text())
+        # Refused — hatches_performed unchanged.
+        assert saved["hatches_performed"] == 1
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)

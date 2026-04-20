@@ -95,7 +95,7 @@ def _cell_style(char) -> Style:
     except Exception:
         return _DEFAULT_STYLE
 
-_POLL_HZ = 30
+_POLL_HZ = 60
 _READ_CHUNK = 4096
 
 # Pet overlay geometry. The habitat widget renders sprite(7) + name(1) +
@@ -106,14 +106,17 @@ _READ_CHUNK = 4096
 PET_W = 24
 PET_H = 18
 
-def _effective_child_cols(cols: int, went_wide: bool) -> int:
+def _effective_child_cols(cols: int, went_wide: bool, habitat_visible: bool = True) -> int:
     """How wide should we tell the child (Claude) the terminal is?
 
     Start narrow (`cols - PET_W`) so Claude's UI fits alongside the
     floating pet. Once Claude's content has extended below the pet zone
     (LReflowHistoryScreen.content_went_wide), switch to full width — our
-    L-reflow wraps any rows that still land in the narrow zone.
+    L-reflow wraps any rows that still land in the narrow zone. When
+    the habitat is hidden (F4 toggle), always report full width.
     """
+    if not habitat_visible:
+        return cols
     return cols if went_wide else max(20, cols - PET_W)
 
 
@@ -150,6 +153,18 @@ class PtyTerminal(Widget, can_focus=True):
         # the screen's live value, we update Claude's COLUMNS and send
         # Ctrl+L so it repaints at the new width.
         self._last_went_wide: bool = False
+        # When the habitat panel is hidden (F4), Claude has the full
+        # terminal width and no L-shape reflow is needed. The app sets
+        # this via set_habitat_visible(); the PTY uses it to skip the
+        # pet-zone narrow wrap and render every row full-width.
+        self._habitat_visible: bool = True
+        # Pending pty writes buffer + async drain task. Large pastes
+        # would block the event loop if we wrote synchronously (the
+        # pty master blocks when the kernel buffer fills and Claude
+        # hasn't drained it yet). Instead we queue bytes here and
+        # drain in an async task that yields between chunks.
+        self._write_queue: bytearray = bytearray()
+        self._write_task = None
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -210,7 +225,7 @@ class PtyTerminal(Widget, can_focus=True):
         # draws content below the pet zone. On spawn, no content yet,
         # so narrow. The flip is detected in _drain_pty.
         self._last_went_wide = False
-        child_cols = _effective_child_cols(cols, went_wide=False)
+        child_cols = _effective_child_cols(cols, went_wide=False, habitat_visible=self._habitat_visible)
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -267,6 +282,21 @@ class PtyTerminal(Widget, can_focus=True):
     def is_alive(self) -> bool:
         return self._pid is not None and self._fd is not None
 
+    def set_habitat_visible(self, visible: bool) -> None:
+        """Toggle the L-shape reflow at render time only.
+
+        Claude is never informed — its COLUMNS stays narrow throughout
+        the session, so content it emits keeps fitting alongside where
+        the panel would be. When the habitat is hidden, our renderer
+        just stops wrapping and renders pyte's existing buffer at full
+        width (content past the narrow zone is blank space, which
+        looks fine). No SIGWINCH, no Ctrl+L, no retransmit → no blink.
+        """
+        if self._habitat_visible == visible:
+            return
+        self._habitat_visible = visible
+        self.refresh()
+
     def write_bytes(self, data: bytes) -> None:
         """Write keystroke bytes to the child process.
 
@@ -277,19 +307,58 @@ class PtyTerminal(Widget, can_focus=True):
             return
         if self._paused:
             self.resume_live()
-        try:
-            os.write(self._fd, data)
-        except OSError as e:
-            _log.warning("pty write failed: %r", e)
+        self._enqueue_write(data)
 
     def _write_to_child(self, data: str) -> None:
         """Pyte query responses route through here back to the child's stdin."""
         if self._fd is None:
             return
-        try:
-            os.write(self._fd, data.encode("utf-8", errors="replace"))
-        except OSError as e:
-            _log.warning("query response write failed: %r", e)
+        self._enqueue_write(data.encode("utf-8", errors="replace"))
+
+    def _enqueue_write(self, data: bytes) -> None:
+        """Queue bytes for async draining. Small writes (typical keystrokes)
+        fit in one os.write and return immediately; large writes (a paste
+        of tens of KB) would otherwise fill the pty buffer and block the
+        event loop while Claude processes them. Draining from a worker
+        task lets the UI keep rendering."""
+        self._write_queue.extend(data)
+        # exclusive=True in the "pty-write" group means Textual will
+        # serialize writes — if a drain worker is already running it
+        # stays running (new bytes just got appended to the queue it's
+        # reading from); if not, run_worker spins up a fresh one.
+        if self._write_task is None or self._write_task.is_finished:
+            self._write_task = self.run_worker(
+                self._drain_write_queue(), exclusive=True, group="pty-write"
+            )
+
+    async def _drain_write_queue(self) -> None:
+        """Flush self._write_queue to the pty, yielding between chunks
+        so Textual can render. Handles partial writes (kernel buffer
+        full → retry after a yield) without blocking the event loop."""
+        import asyncio
+        # Chunk size that typically fits in one PTY buffer on Linux so
+        # each os.write is one-shot. Large pastes get split into many
+        # chunks, each separated by a yield to the event loop.
+        CHUNK = 4096
+        while self._write_queue and self._fd is not None:
+            view = memoryview(bytes(self._write_queue[:CHUNK]))
+            try:
+                n = os.write(self._fd, view)
+            except BlockingIOError:
+                # Buffer full. Yield, let Claude drain, retry.
+                await asyncio.sleep(0.002)
+                continue
+            except OSError as e:
+                _log.warning("pty write failed: %r", e)
+                self._write_queue.clear()
+                return
+            if n <= 0:
+                await asyncio.sleep(0.002)
+                continue
+            del self._write_queue[:n]
+            # Yield every chunk so the app stays responsive even on
+            # megabyte-sized pastes.
+            await asyncio.sleep(0)
 
     def resize_to(self, cols: int, rows: int) -> None:
         """Update both pyte's screen and the pty's view of its size.
@@ -325,7 +394,7 @@ class PtyTerminal(Widget, can_focus=True):
         # regress Claude to a cramped layout.
         went_wide = self._last_went_wide
         if self._fd is not None:
-            child_cols = _effective_child_cols(cols, went_wide=went_wide)
+            child_cols = _effective_child_cols(cols, went_wide=went_wide, habitat_visible=self._habitat_visible)
             try:
                 winsize = struct.pack("HHHH", rows, child_cols, 0, 0)
                 fcntl.ioctl(self._fd, termios.TIOCSWINSZ, winsize)
@@ -350,7 +419,7 @@ class PtyTerminal(Widget, can_focus=True):
         # Transition. Recompute cols, update Claude, clear pyte, Ctrl+L.
         cols = max(20, self.size.width)
         rows = max(5, self.size.height)
-        child_cols = _effective_child_cols(cols, went_wide=current)
+        child_cols = _effective_child_cols(cols, went_wide=current, habitat_visible=self._habitat_visible)
         try:
             winsize = struct.pack("HHHH", rows, child_cols, 0, 0)
             fcntl.ioctl(self._fd, termios.TIOCSWINSZ, winsize)
@@ -701,9 +770,13 @@ class PtyTerminal(Widget, can_focus=True):
         if self._screen is None:
             return []
         cols = self._screen.columns
+        # When the habitat is hidden, Claude owns the full width and we
+        # pass every row through as a single full-width span. No reflow,
+        # no narrow wrap — Claude's own layout takes over.
+        if not self._habitat_visible:
+            return [[(y, 0, cols)] for y in range(self._screen.lines)]
         narrow = max(0, cols - PET_W)
         if narrow == 0 or narrow >= cols:
-            # Degenerate widths: no pet column, just pass through.
             return [[(y, 0, cols)] for y in range(self._screen.lines)]
 
         out = self._pet_zone_virtual_rows(cols, narrow)

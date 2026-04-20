@@ -23,7 +23,7 @@ _HERE = Path(__file__).resolve().parent
 _BUDDY = _HERE.parent
 sys.path.insert(0, str(_BUDDY))
 from state import derive_mood, write_atomic  # noqa: E402
-from collection import active_buddy, ensure_first_seen, migrate  # noqa: E402
+from collection import _buddy_level, active_buddy, ensure_first_seen, migrate  # noqa: E402
 
 # Default file paths honour BUDDY_STATE_DIR so sim-test runs redirect
 # automatically. Overridable via args (used by pytest).
@@ -113,8 +113,10 @@ def read_view(
 
     total_prompts = int(prog.get("total_prompts", 0))
     total_tools = int(prog.get("total_tools", 0))
-    xp = total_prompts + total_tools // 3
-    level = int(math.sqrt(xp / 10)) if xp > 0 else 0
+    # XP + level formula lives in collection._buddy_level so the habitat
+    # panel and the token/global-level math always agree.
+    xp = total_prompts * 2 + total_tools // 3
+    level = _buddy_level(prog)
 
     first_seen = prog.get("first_seen_ts", 0)
     time_with_buddy_s = max(0, int(now - first_seen)) if first_seen else 0
