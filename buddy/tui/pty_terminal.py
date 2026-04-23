@@ -47,6 +47,9 @@ from rich.style import Style
 from textual.strip import Strip
 from textual.widget import Widget
 
+from debug_log import log as _dbg_log
+from lreflow import LReflowHistoryScreen
+
 _log = logging.getLogger("buddy.tui.pty_terminal")
 
 # No bgcolor — blank cells fall through to the widget's background
@@ -182,21 +185,15 @@ class PtyTerminal(Widget, can_focus=True):
         cols = max(20, self.size.width)
         rows = max(5, self.size.height)
         _log.info("starting pty: cols=%d rows=%d cmd=%r", cols, rows, self._command)
-        try:
-            with open("/tmp/spike.log", "a") as _dbg:
-                import time
-                _dbg.write(
-                    f"{time.time():.3f} SPAWN cols={cols} rows={rows} "
-                    f"widget={self.size.width}x{self.size.height}\n"
-                )
-        except Exception:
-            pass
+        _dbg_log(
+            f"SPAWN cols={cols} rows={rows} "
+            f"widget={self.size.width}x{self.size.height}"
+        )
 
         # HistoryScreen subclass for scrollback + the content_went_wide
         # signal that drives the narrow↔wide COLUMNS flip we send Claude.
         # `ratio` controls how many lines one prev_page/next_page moves —
         # 0.15 gives a gentler wheel tick than pyte's default half-screen.
-        from lreflow import LReflowHistoryScreen
         self._screen = LReflowHistoryScreen(
             cols, rows, pet_w=PET_W, pet_h=PET_H, history=2000, ratio=0.15,
         )
@@ -359,15 +356,10 @@ class PtyTerminal(Widget, can_focus=True):
         """
         if cols <= 0 or rows <= 0:
             return
-        try:
-            with open("/tmp/spike.log", "a") as _dbg:
-                import time
-                _dbg.write(
-                    f"{time.time():.3f} RESIZE cols={cols} rows={rows} "
-                    f"widget={self.size.width}x{self.size.height}\n"
-                )
-        except Exception:
-            pass
+        _dbg_log(
+            f"RESIZE cols={cols} rows={rows} "
+            f"widget={self.size.width}x{self.size.height}"
+        )
         # Drain any pending bytes before resizing so we don't split an
         # escape sequence across the size change.
         self._drain_pty()
@@ -396,14 +388,33 @@ class PtyTerminal(Widget, can_focus=True):
 
     def _maybe_flip_width(self) -> None:
         """Check the screen's content_went_wide bit; if it doesn't match
-        our last cached value, update Claude's COLUMNS and trigger a
-        repaint. Called from _drain_pty after every read."""
+        our last cached value, update Claude's COLUMNS via SIGWINCH.
+        Called from _drain_pty after every read.
+
+        Deferred while the user is typing: the app maintains _typed_line
+        as a mirror of the in-flight prompt, and if it's non-empty we
+        skip the flip. Claude's input editor loses the current line
+        whenever SIGWINCH lands mid-composition, and near the pet-zone
+        boundary the flag can oscillate per-keystroke, causing a loop.
+        Deferring until the line is empty (after Enter, Ctrl+U, or
+        Ctrl+C, all of which clear _typed_line in app.on_key) pins the
+        flip to a natural commit point — no buffer loss, no oscillation.
+
+        Previously we also issued `clear_visible()` on pyte and sent
+        Ctrl+L to force Claude to redraw. Both were destructive: Ctrl+L
+        caused Claude to re-render everything including its input box.
+        SIGWINCH alone is the portable contract — Claude Code self-
+        redraws when the signal arrives.
+        """
         if self._fd is None or self._screen is None:
             return
         current = getattr(self._screen, "content_went_wide", False)
         if current == self._last_went_wide:
             return
-        # Transition. Recompute cols, update Claude, clear pyte, Ctrl+L.
+        # Defer if the user has an in-flight typed line.
+        app = self.app
+        if app is not None and getattr(app, "_typed_line", ""):
+            return
         cols = max(20, self.size.width)
         rows = max(5, self.size.height)
         child_cols = _effective_child_cols(cols, went_wide=current, habitat_visible=self._habitat_visible)
@@ -412,20 +423,6 @@ class PtyTerminal(Widget, can_focus=True):
             fcntl.ioctl(self._fd, termios.TIOCSWINSZ, winsize)
         except OSError as e:
             _log.warning("TIOCSWINSZ on width flip failed: %r", e)
-        # Clear just the visible screen so stale pixels from the old
-        # width don't linger, but keep tab stops / modes / scrollback
-        # intact. reset() does a full reinit which causes a visible
-        # blank-frame blink. clear_visible() is a bypass that also
-        # preserves our content_went_wide flag (so the transition we
-        # just detected isn't immediately undone).
-        if hasattr(self._screen, "clear_visible"):
-            self._screen.clear_visible()
-        else:
-            self._screen.erase_in_display(2)
-        try:
-            os.write(self._fd, b"\x0c")
-        except OSError:
-            pass
         self._last_went_wide = current
 
     # ── pty I/O ─────────────────────────────────────────────────────────────

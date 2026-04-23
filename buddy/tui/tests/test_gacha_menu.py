@@ -126,7 +126,34 @@ async def test_enter_on_another_filled_slot_switches(monkeypatch, tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_h_then_s_redeems_shards_when_available(monkeypatch, tmp_path) -> None:
+async def test_h_opens_prompt_messagebox(monkeypatch, tmp_path) -> None:
+    """Pressing H on the gacha menu pushes a MessageBox prompt asking
+    'tokens or shards?'. The gacha menu stays in the stack underneath."""
+    _seed(monkeypatch, tmp_path, {
+        "active_id": "slime",
+        "buddies": {"slime": {"species_id": "slime", "total_prompts": 20}},
+        "hatches_performed": 6, "shards": 5,
+    })
+    app = BuddyApp(["/bin/cat"])
+    async with app.run_test() as pilot:
+        await pilot.pause(0.1)
+        await pilot.press("f2")
+        await pilot.pause(0.1)
+        await pilot.press("h")
+        await pilot.pause(0.1)
+        from message_box import MessageBox
+        assert isinstance(app.screen, MessageBox)
+        assert app.screen.kind == "prompt"
+        assert any(isinstance(s, GachaMenu) for s in app.screen_stack)
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.1)
+
+
+@pytest.mark.asyncio
+async def test_h_then_s_pushes_overlay_when_shards_ready(monkeypatch, tmp_path) -> None:
+    """H opens the prompt; pressing s dismisses it with ("choice", "s")
+    and pushes the HatchOverlay. Progression is unchanged until the
+    overlay's CRACK_END tick (covered in test_hatch_overlay.py)."""
     prog = _seed(monkeypatch, tmp_path, {
         "active_id": "slime",
         "buddies": {"slime": {"species_id": "slime", "total_prompts": 20}},
@@ -137,21 +164,24 @@ async def test_h_then_s_redeems_shards_when_available(monkeypatch, tmp_path) -> 
         await pilot.pause(0.1)
         await pilot.press("f2")
         await pilot.pause(0.1)
-        # h arms the prompt; s picks the shards path.
         await pilot.press("h")
         await pilot.pause(0.1)
         await pilot.press("s")
         await pilot.pause(0.1)
-
+        from hatch_overlay import HatchOverlay
+        assert isinstance(app.screen, HatchOverlay)
+        assert any(isinstance(s, GachaMenu) for s in app.screen_stack)
         saved = json.loads(prog.read_text())
-        assert len(saved["buddies"]) == 2
-        assert saved["shards"] == 0
+        assert saved["shards"] == 5
+        assert len(saved["buddies"]) == 1
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)
 
 
 @pytest.mark.asyncio
-async def test_h_then_s_errors_without_enough_shards(monkeypatch, tmp_path) -> None:
+async def test_h_then_s_shows_error_messagebox_without_enough_shards(monkeypatch, tmp_path) -> None:
+    """Insufficient shards → the shard-path pre-check pushes an error
+    MessageBox instead of the overlay. No write."""
     prog = _seed(monkeypatch, tmp_path, {
         "active_id": "slime",
         "buddies": {"slime": {"species_id": "slime", "total_prompts": 20}},
@@ -166,17 +196,24 @@ async def test_h_then_s_errors_without_enough_shards(monkeypatch, tmp_path) -> N
         await pilot.pause(0.1)
         await pilot.press("s")
         await pilot.pause(0.1)
-
+        from message_box import MessageBox
+        assert isinstance(app.screen, MessageBox)
+        assert app.screen.kind == "error"
         saved = json.loads(prog.read_text())
-        # Hatch refused — collection unchanged.
         assert len(saved["buddies"]) == 1
         assert saved["shards"] == 2
+        # q closes the error; user is back on the gacha menu.
+        await pilot.press("q")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, GachaMenu)
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)
 
 
 @pytest.mark.asyncio
-async def test_h_then_t_spends_token_when_available(monkeypatch, tmp_path) -> None:
+async def test_h_then_t_pushes_overlay_when_tokens_ready(monkeypatch, tmp_path) -> None:
+    """H opens the prompt; pressing t dismisses it with ("choice", "t")
+    and pushes the HatchOverlay."""
     prog = _seed(monkeypatch, tmp_path, {
         "active_id": "slime",
         # 100 prompts → xp 200 → level 10 → 2 tokens earned, 2 available.
@@ -192,17 +229,19 @@ async def test_h_then_t_spends_token_when_available(monkeypatch, tmp_path) -> No
         await pilot.pause(0.1)
         await pilot.press("t")
         await pilot.pause(0.1)
-
+        from hatch_overlay import HatchOverlay
+        assert isinstance(app.screen, HatchOverlay)
+        assert any(isinstance(s, GachaMenu) for s in app.screen_stack)
         saved = json.loads(prog.read_text())
-        # hatches_performed bumped, roster may or may not have grown
-        # depending on the (seeded) roll — but the token was spent.
-        assert saved["hatches_performed"] == 2
+        assert saved["hatches_performed"] == 1
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)
 
 
 @pytest.mark.asyncio
-async def test_h_then_t_errors_without_tokens(monkeypatch, tmp_path) -> None:
+async def test_h_then_t_shows_error_messagebox_without_tokens(monkeypatch, tmp_path) -> None:
+    """No tokens and non-empty roster → the token-path pre-check pushes
+    an error MessageBox instead of the overlay."""
     prog = _seed(monkeypatch, tmp_path, {
         "active_id": "slime",
         "buddies": {"slime": {"species_id": "slime", "total_prompts": 0}},
@@ -217,9 +256,13 @@ async def test_h_then_t_errors_without_tokens(monkeypatch, tmp_path) -> None:
         await pilot.pause(0.1)
         await pilot.press("t")
         await pilot.pause(0.1)
-
+        from message_box import MessageBox
+        assert isinstance(app.screen, MessageBox)
+        assert app.screen.kind == "error"
         saved = json.loads(prog.read_text())
-        # Refused — hatches_performed unchanged.
         assert saved["hatches_performed"] == 1
+        await pilot.press("q")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, GachaMenu)
         await pilot.press("ctrl+q")
         await pilot.pause(0.1)

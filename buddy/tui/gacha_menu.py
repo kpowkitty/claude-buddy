@@ -11,7 +11,6 @@ in one place.
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -19,21 +18,7 @@ from rich.segment import Segment
 from rich.style import Style
 from textual import events
 from textual.binding import Binding
-from textual.binding import Binding as _Binding
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-
-
-class _CursorDrivenScroll(VerticalScroll, inherit_bindings=False):
-    """VerticalScroll without ScrollableContainer's arrow-key bindings.
-
-    ScrollableContainer binds up/down/left/right to scroll actions. A
-    plain `BINDINGS = []` override doesn't suppress them because Textual
-    merges bindings up the class chain by default — we need
-    `inherit_bindings=False` to actually drop them. Cursor navigation
-    lives entirely on the modal; this container just paints.
-    """
-
-    BINDINGS: list = []
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.strip import Strip
 from textual.widget import Widget
@@ -48,19 +33,32 @@ if str(_BUDDY) not in sys.path:
 from collection import (  # noqa: E402
     SHARDS_PER_REDEEM,
     _buddy_level,
-    active_buddy,
     all_buddies,
     global_level,
-    has_species,
     hatches_available,
     migrate,
     shards,
 )
 import hatch as _hatch  # noqa: E402
+from hatch_overlay import HatchOverlay  # noqa: E402
+from message_box import MessageBox  # noqa: E402
 from species import RARITY_ORDER, SPECIES, find_species  # noqa: E402
 from sprites import frames_for  # noqa: E402
 from state import PROGRESSION, read_json  # noqa: E402
 import switch as _switch  # noqa: E402
+
+
+class _CursorDrivenScroll(VerticalScroll, inherit_bindings=False):
+    """VerticalScroll without ScrollableContainer's arrow-key bindings.
+
+    ScrollableContainer binds up/down/left/right to scroll actions. A
+    plain `BINDINGS = []` override doesn't suppress them because Textual
+    merges bindings up the class chain by default — we need
+    `inherit_bindings=False` to actually drop them. Cursor navigation
+    lives entirely on the modal; this container just paints.
+    """
+
+    BINDINGS: list = []
 
 _RARITY_COLOR = {
     "common": "white",
@@ -145,12 +143,6 @@ class _Slot(Widget, can_focus=True):
             return _center("locked", w, Style(color="grey35"))
 
         return _blank(w)
-
-    def render_line_border_hint(self) -> Style:
-        """CSS can't show a focus ring cleanly per-cell, so we draw our own
-        via watch_selected → refresh + a side-channel style in render_line
-        if needed. For now the ★ marker + bright border suffice."""
-        return Style()
 
 
 def _blank(w: int) -> Strip:
@@ -269,13 +261,6 @@ class GachaMenu(ModalScreen):
         # that rarity. Cursor (ry, rx) picks a slot.
         self._rows: list[list[_Slot]] = []
         self._cursor: tuple[int, int] = (0, 0)
-        # Two-step hatch: press h → _awaiting_hatch_choice = True, prompt
-        # footer; next keypress t/s resolves the hatch, anything else
-        # cancels. Keeps the economy decision explicit.
-        self._awaiting_hatch_choice: bool = False
-        # Footer clear timer — toasts disappear after 7s so status like
-        # "Not enough tokens" doesn't linger indefinitely.
-        self._footer_timer = None
 
     def compose(self):
         panel = Container(id="gacha-panel")
@@ -397,76 +382,77 @@ class GachaMenu(ModalScreen):
             self.dismiss(("switched", slot.species_id))
 
     def action_hatch(self) -> None:
-        """Step 1: arm the hatch prompt. Footer asks 'tokens or shards?';
-        the next t/s keystroke completes the hatch, any other key cancels."""
-        self._awaiting_hatch_choice = True
-        self._set_footer("Use tokens or shards? [b]t[/] / [b]s[/]", clear_after=None)
+        """Step 1: push a MessageBox prompt asking 'tokens or shards?'.
+        The prompt dismisses with ("choice", "t"|"s") which routes to the
+        right hatch path, or ("cancelled", None) which does nothing."""
+        self.app.push_screen(
+            MessageBox(
+                "Use tokens or shards?",
+                kind="prompt",
+                choices=("t", "s"),
+            ),
+            self._after_hatch_choice,
+        )
+
+    def _after_hatch_choice(self, result) -> None:
+        if not isinstance(result, tuple) or result[0] != "choice":
+            return
+        key = result[1]
+        if key == "t":
+            self._hatch_with_tokens()
+        elif key == "s":
+            self._hatch_with_shards()
 
     def _hatch_with_tokens(self) -> None:
-        if hatches_available(self._collection) <= 0:
-            self._set_footer("[red]Not enough tokens (1 required to roll)[/]")
+        # Pre-check: if no token is available (and we're not on a starter-
+        # gift empty roster), show an error MessageBox instead of rolling.
+        starter = len(self._collection.get("buddies", {})) == 0
+        if not starter and hatches_available(self._collection) <= 0:
+            self.app.push_screen(
+                MessageBox("Not enough tokens (1 required to roll).", kind="error")
+            )
             return
-        ok, msg, _entry = _hatch.spend_token_hatch()
-        if ok:
-            self.dismiss(("hatched", msg))
-        else:
-            self._set_footer(f"[red]{msg}[/]")
+        # Push the overlay on top of this menu — the gacha menu stays in
+        # the screen stack underneath. The overlay performs the roll at
+        # CRACK_END and pops itself on q, landing the user back here.
+        self.app.push_screen(HatchOverlay("tokens"), self._after_hatch_overlay)
 
     def _hatch_with_shards(self) -> None:
         if shards(self._collection) < SHARDS_PER_REDEEM:
-            self._set_footer(
-                f"[red]Not enough shards ({SHARDS_PER_REDEEM} required to roll)[/]"
+            self.app.push_screen(
+                MessageBox(
+                    f"Not enough shards ({SHARDS_PER_REDEEM} required to roll).",
+                    kind="error",
+                )
             )
             return
-        ok, msg, _entry = _hatch.redeem_shards_hatch()
-        if ok:
-            self.dismiss(("hatched", msg))
-        else:
-            self._set_footer(f"[red]{msg}[/]")
+        self.app.push_screen(HatchOverlay("shards"), self._after_hatch_overlay)
 
-    # Default lifetime for a toast in the footer, seconds. Errors and
-    # confirmations auto-clear so "Not enough tokens" doesn't linger.
-    _FOOTER_TOAST_SECONDS = 7.0
-
-    def _set_footer(self, markup: str, *, clear_after: float | None = _FOOTER_TOAST_SECONDS) -> None:
-        """Update the footer text. If clear_after is set, schedule a
-        revert to the default key hints after that many seconds."""
-        self.query_one("#gacha-footer", Static).update(markup)
-        if self._footer_timer is not None:
-            try:
-                self._footer_timer.stop()
-            except Exception:
-                pass
-            self._footer_timer = None
-        if clear_after is not None:
-            self._footer_timer = self.set_timer(clear_after, self._reset_footer)
-
-    def _reset_footer(self) -> None:
-        self._awaiting_hatch_choice = False
-        self.query_one("#gacha-footer", Static).update(
-            "↑↓←→ navigate  ·  Enter switch  ·  H hatch  ·  q close"
-        )
-        self._footer_timer = None
-
-    async def on_key(self, event: events.Key) -> None:
-        # While the hatch prompt is armed, intercept t/s/other before
-        # Textual dispatches to the normal bindings.
-        if self._awaiting_hatch_choice:
-            key = event.key
-            self._awaiting_hatch_choice = False
-            if key == "t":
-                event.stop()
-                self._hatch_with_tokens()
-            elif key == "s":
-                event.stop()
-                self._hatch_with_shards()
-            else:
-                # Any other key cancels the hatch prompt.
-                event.stop()
-                self._reset_footer()
+    def _after_hatch_overlay(self, _result) -> None:
+        """Overlay closed → reload the collection and poke each slot so
+        newly-filled species show their sprite. Active stays on whoever
+        it was before — the user picks whether to switch via Enter on
+        the new slot."""
+        self._collection = _load_collection()
+        active_id = self._collection.get("active_id")
+        for row in self._rows:
+            for slot in row:
+                new_entry = self._find_entry(slot.species_id)
+                slot.entry = new_entry
+                slot.filled = new_entry is not None
+                slot.active = slot.filled and slot.species_id == active_id
+                if slot.active:
+                    slot.add_class("-active")
+                else:
+                    slot.remove_class("-active")
+                slot.refresh()
+        # Header stats (tokens/shards/count) also need a repaint.
+        header = self.query_one("#gacha-header", _Header)
+        header.collection = self._collection
+        header.refresh_content()
 
     async def on_click(self, event: events.Click) -> None:
-        # Click on the header shard banner = arm the hatch prompt.
+        # Click on the header shard banner = open the hatch prompt.
         if event.widget is None:
             return
         widget = event.widget
