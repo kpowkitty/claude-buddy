@@ -16,6 +16,7 @@ from typing import Sequence
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Static
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +26,7 @@ sys.path.insert(0, _BUDDY)
 
 from chirp_loop_wiring import build_chirp_loop  # noqa: E402
 from collection import active_buddy, migrate  # noqa: E402
+from debug_log import log as _dbg_log  # noqa: E402
 from gacha_menu import GachaMenu  # noqa: E402
 from habitat import Habitat, HABITAT_WIDTH  # noqa: E402
 from input_map import key_to_bytes  # noqa: E402
@@ -134,6 +136,69 @@ class BuddyApp(App):
         self.query_one("#pty", PtyTerminal).focus()
         # Tick the chirp state machine once per second.
         self.set_interval(1.0, self._chirp_loop.advance)
+        self._enable_kitty_progressive_flags()
+
+    def on_unmount(self) -> None:
+        self._restore_kitty_progressive_flags()
+
+    def _enable_kitty_progressive_flags(self) -> None:
+        """Request the kitty keyboard protocol's "report all keys as
+        escape codes" flag (bit 0x8).
+
+        Textual's driver already pushes `\\x1b[>1u` at startup (minimum
+        disambiguation), but that doesn't cover Enter+modifier — so
+        Shift+Enter and plain Enter arrive indistinguishable. Flag 8
+        asks kitty-aware terminals (Ghostty, Kitty, WezTerm, iTerm2
+        3.5+, Alacritty 0.12+, foot, Ptyxis…) to emit Shift+Enter as
+        a distinct CSI-u sequence (`\\x1b[13;2u`) that Textual's parser
+        maps to `event.key == 'shift+enter'`.
+
+        Terminals without the protocol (macOS Terminal.app, tmux
+        without passthrough) silently ignore the request and keep
+        sending plain `\\r`; they physically can't distinguish the
+        two, so there's no regression.
+
+        Skipped when running under App.run_test() — no real terminal
+        is consuming the bytes, and they clutter pytest output.
+        """
+        if self._is_headless():
+            return
+        try:
+            # Mode 2 = union: add flag 8 to whatever's already on the
+            # top of the keyboard-protocol stack (Textual pushed flag 1
+            # during driver init). Setting `=8;1u` alone would clobber
+            # Textual's flag, breaking its other disambiguation.
+            sys.stdout.write("\x1b[=8;2u")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    def _restore_kitty_progressive_flags(self) -> None:
+        """Reset flags to the minimal disambiguation level Textual's
+        driver established. The driver's own pop on app exit
+        (`\\x1b[<u`) removes its push, but not our flag set — so we
+        undo the `=8;u` explicitly."""
+        if self._is_headless():
+            return
+        try:
+            # Mode 3 = remove: strip flag 8 back off. Leaves Textual's
+            # flag 1 alone so its own pop-on-exit still cleans up.
+            sys.stdout.write("\x1b[=8;3u")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    def _is_headless(self) -> bool:
+        """True when running under App.run_test() or a non-tty stdout.
+        We skip terminal-control sequences in those cases because no
+        real terminal is listening — they'd just clutter output."""
+        driver = getattr(self, "_driver", None)
+        if driver is not None and getattr(driver, "is_headless", False):
+            return True
+        try:
+            return not sys.stdout.isatty()
+        except Exception:
+            return True
 
     # ── actions ────────────────────────────────────────────────────────────
 
@@ -208,12 +273,21 @@ class BuddyApp(App):
 
     # ── input routing ──────────────────────────────────────────────────────
 
+    def _modal_on_top(self) -> bool:
+        """True when a ModalScreen is the topmost screen — the modal owns
+        the keyboard, so key/paste events must not leak through to the pty."""
+        return isinstance(self.screen, ModalScreen)
+
     async def on_key(self, event) -> None:
-        # If a modal (e.g. the gacha menu) is on top of the screen stack,
-        # the modal owns the keyboard. We must not forward anything to
-        # the pty — otherwise Claude sees the user's menu navigation.
-        from textual.screen import ModalScreen
-        if isinstance(self.screen, ModalScreen):
+        # Opt-in key-event trace. Enable with BUDDY_DEBUG=1. Useful for
+        # diagnosing terminal-encoding issues (Shift+Enter, kitty
+        # protocol, modifier reporting) — writes to /tmp/spike.log.
+        _dbg_log(
+            f"KEY key={event.key!r} "
+            f"character={getattr(event, 'character', None)!r}"
+        )
+
+        if self._modal_on_top():
             return
 
         # Shift+PageUp/Down page the local scrollback. Shift+End returns
@@ -281,8 +355,7 @@ class BuddyApp(App):
         of Enter presses).
         """
         # Modal on top owns input — don't bleed paste bytes to the pty.
-        from textual.screen import ModalScreen
-        if isinstance(self.screen, ModalScreen):
+        if self._modal_on_top():
             return
         text = event.text
         if not text:

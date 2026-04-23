@@ -30,7 +30,6 @@ from cli_help import print_help, print_test_mode_banner  # noqa: E402
 from collection import (  # noqa: E402
     LEVELS_PER_TOKEN_STEP,
     SHARDS_PER_REDEEM,
-    active_buddy,
     add_buddy,
     add_shard,
     all_buddies,
@@ -280,13 +279,22 @@ def do_shard_hatch(collection: dict, rng: random.Random) -> int:
 # ─── silent helpers for callers (e.g. TUI gacha menu) ──────────────────────
 
 
-def spend_token_hatch(rng: random.Random | None = None) -> tuple[bool, str, dict | None]:
+def spend_token_hatch(
+    rng: random.Random | None = None,
+    *,
+    set_active: bool = True,
+) -> tuple[bool, str, dict | None]:
     """Spend one hatch token (or the starter gift) for a random roll.
 
     Silent wrapper around do_tokens_hatch for the TUI. Returns (ok,
     message, entry). Dupes count as ok=True since the token was spent
     and a shard was granted — the message explains. Writes
     progression.json on success.
+
+    set_active: if False, the new buddy is persisted but active_id is left
+    alone — the caller decides when (or whether) to switch. Used by the
+    TUI hatch overlay so the habitat doesn't flip to the new pet mid-
+    animation and spoil the reveal.
     """
     rng = rng or random.Random()
     collection = load_collection()
@@ -302,12 +310,16 @@ def spend_token_hatch(rng: random.Random | None = None) -> tuple[bool, str, dict
         save_collection(collection)
         return True, f"{species['name']} — duplicate! +1 shard.", None
     entry = _entry_for(species, rarity, skills)
-    collection = add_buddy(collection, species["id"], entry)
+    collection = add_buddy(collection, species["id"], entry, set_active_to_new=set_active)
     save_collection(collection)
     return True, f"Hatched {species['name']}!", entry
 
 
-def redeem_shards_hatch(rng: random.Random | None = None) -> tuple[bool, str, dict | None]:
+def redeem_shards_hatch(
+    rng: random.Random | None = None,
+    *,
+    set_active: bool = True,
+) -> tuple[bool, str, dict | None]:
     """Spend SHARDS_PER_REDEEM shards for a guaranteed-new-species roll.
 
     Returns (ok, message, entry):
@@ -316,6 +328,10 @@ def redeem_shards_hatch(rng: random.Random | None = None) -> tuple[bool, str, di
 
     Silent wrapper around do_shard_hatch for non-CLI callers. Writes
     progression.json on success.
+
+    set_active: see spend_token_hatch. Defaults to True so existing CLI
+    paths keep their behavior; the TUI overlay passes False to keep the
+    previous buddy active until the user explicitly switches.
     """
     rng = rng or random.Random()
     collection = load_collection()
@@ -329,7 +345,7 @@ def redeem_shards_hatch(rng: random.Random | None = None) -> tuple[bool, str, di
     skills = roll_skills(rng, species, rarity)
     collection = redeem_shards(collection)
     entry = _entry_for(species, rarity, skills)
-    collection = add_buddy(collection, species["id"], entry)
+    collection = add_buddy(collection, species["id"], entry, set_active_to_new=set_active)
     save_collection(collection)
     name = species["name"]
     return True, f"Hatched {name}!", entry

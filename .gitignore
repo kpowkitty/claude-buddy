@@ -12,3 +12,6 @@ __pycache__/
 
 # Throwaway sim-test env (created by buddy/tests/run)
 buddy/tests/env/
+
+# Test outputs
+keys.log
